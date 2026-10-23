@@ -1,0 +1,22 @@
+# claude-ticker configuration. Edit, then: sudo systemctl restart claude-ticker
+# Every key is optional. All options: AGENTS.md §4.
+
+# Timezone where the display is, as an IANA name. Reset times are shown in
+# it. Omit it to use the Pi's OS timezone (Raspberry Pi OS defaults to
+# Europe/London unless you set one in Raspberry Pi Imager). Must stay above
+# the first [section].
+# timezone = "Australia/Sydney"
+
+[account]
+# Where the sign-in is kept. Written by the phone sign-in page or
+# `sudo claude-ticker login`, and rewritten whenever the token is refreshed.
+credentials = "/var/lib/claude-ticker/credentials.json"
+# When signed out, the display shows a QR code for a sign-in page on this
+# port (only while that screen is up). 0 turns it off; 1024 or above.
+sign_in_port = 8080
+
+[display]
+poll_seconds = 300           # how often to fetch usage; minimum 60
+stale_minutes = 15           # mark the numbers STALE after this long without an update
+full_refresh_every = 12      # partial refreshes between full refreshes (12 × 5 min ≈ hourly)
+flipped = false              # rotate 180° if mounted upside down

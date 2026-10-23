@@ -1,0 +1,59 @@
+[package]
+name = "claude-ticker"
+version = "0.1.0"
+edition = "2024"
+description = "Claude plan usage display for a Raspberry Pi Zero with a Waveshare 2.13\" e-paper HAT"
+publish = false
+
+[features]
+default = []
+# Real Waveshare 2.13" HAT on a Raspberry Pi (the driver module is Linux-only).
+epd = ["net", "web", "dep:rppal", "dep:epd-waveshare"]
+# Fetch usage from the Claude API over HTTPS (src/api.rs).
+net = ["dep:ureq", "dep:ring"]
+# The sign-in page the QR code on the panel points to (src/web.rs; std only).
+web = ["net"]
+# Render frames to PNG files (examples/preview.rs).
+preview = ["dep:image"]
+# Desktop debug window via SDL2 (examples/simulator.rs). Needs `brew install sdl2`.
+simulator = ["dep:embedded-graphics-simulator"]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono-tz = "0.10"
+embedded-graphics = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Sign-in QR code on the panel. Pure Rust, no dependencies.
+qrcodegen = "1.8"
+thiserror = "2"
+toml = { version = "1", default-features = false, features = ["parse", "serde"] }
+
+epd-waveshare = { version = "0.6", optional = true }
+ureq = { version = "3", optional = true }
+# Already in the tree via ureq's rustls; used directly for the login PKCE (SHA-256, secure random).
+ring = { version = "0.17", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+embedded-graphics-simulator = { version = "0.8", optional = true }
+
+# rppal only builds on Linux; on other hosts `--features epd` compiles everything else.
+[target.'cfg(target_os = "linux")'.dependencies]
+rppal = { version = "0.22", optional = true, features = ["hal"] }
+
+[[example]]
+name = "preview"
+required-features = ["preview"]
+
+[[example]]
+name = "logo"
+required-features = ["preview"]
+
+[[example]]
+name = "simulator"
+required-features = ["simulator"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

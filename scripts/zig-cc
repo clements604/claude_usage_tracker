@@ -1,0 +1,21 @@
+#!/bin/sh
+# C compiler shim for type-checking Linux targets from macOS without a cross
+# gcc: ring (pulled in by the HTTPS client) compiles some C in its build
+# script, even under `cargo check`/`clippy`. Needs `brew install zig`.
+#
+#   CC_aarch64_unknown_linux_gnu="$PWD/scripts/zig-cc" \
+#     cargo clippy --features epd --target aarch64-unknown-linux-gnu -- -D warnings
+#
+# cc-rs passes a clang-style --target=<rust triple>; translate it for zig.
+zig_target=aarch64-linux-gnu
+cpu=
+for arg in "$@"; do
+    case "$arg" in
+        --target=aarch64-*) zig_target=aarch64-linux-gnu ;;
+        --target=arm-*) zig_target=arm-linux-gnueabihf; cpu=-mcpu=arm1176jzf_s ;;
+        --target=*) ;;
+        *) set -- "$@" "$arg" ;;
+    esac
+    shift
+done
+exec zig cc -target "$zig_target" $cpu "$@"

@@ -1,0 +1,38 @@
+# systemd unit for claude-ticker. Installed by deploy/install.sh; see README.md.
+[Unit]
+Description=claude-ticker Claude usage e-paper display
+Documentation=file:///etc/claude-ticker/config.toml
+# Start straight away, even before the network is up. The Pi has no
+# real-time clock, so the app itself waits for systemd-timesyncd to set the
+# time (/run/systemd/timesync/synchronized) and shows "SETTING THE CLOCK"
+# meanwhile. Do not enable systemd-time-wait-sync: it would hold the app back
+# and leave a stale image on screen instead. A fetch that fails because Wi-Fi
+# is still coming up is retried within a minute.
+After=time-sync.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/claude-ticker /etc/claude-ticker/config.toml
+Restart=on-failure
+RestartSec=15
+
+# No dedicated account needed; GPIO and SPI access come from these groups.
+DynamicUser=yes
+SupplementaryGroups=gpio spi
+
+# When signed out, the app also serves a sign-in page on sign_in_port
+# (default 8080) for as long as the QR code is on screen.
+
+# /var/lib/claude-ticker: the OAuth credentials. The app rewrites them every
+# time it refreshes the access token, so this must stay writable.
+StateDirectory=claude-ticker
+StateDirectoryMode=0700
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
