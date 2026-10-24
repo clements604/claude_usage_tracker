@@ -53,10 +53,28 @@ systemctl daemon-reload
 # The app waits for NTP itself; make sure timesyncd (which it watches) is on.
 systemctl enable --now systemd-timesyncd.service
 
-if ! grep -Eq '^\s*dtparam=spi=on' /boot/firmware/config.txt 2>/dev/null; then
-    echo "warning: SPI looks disabled; add dtparam=spi=on to /boot/firmware/config.txt and reboot" >&2
+# The HAT talks over SPI, which Raspberry Pi OS leaves off by default. Turn it
+# on: uncomment or flip an existing dtparam=spi line, or add one under [all]
+# (the file may end inside a model-specific section such as [cm4]).
+BOOTCFG=/boot/firmware/config.txt
+[ -f "$BOOTCFG" ] || BOOTCFG=/boot/config.txt    # Raspberry Pi OS before Bookworm
+REBOOT=""
+if [ ! -f "$BOOTCFG" ]; then
+    echo "warning: no config.txt found; add dtparam=spi=on to it by hand and reboot" >&2
+elif ! grep -Eq '^[[:space:]]*dtparam=([^#]*,)?spi(=on)?([,[:space:]#]|$)' "$BOOTCFG"; then
+    cp "$BOOTCFG" "$BOOTCFG.claude-ticker.bak"
+    if grep -Eq '^[[:space:]]*#?[[:space:]]*dtparam=([^#]*,)?spi=' "$BOOTCFG"; then
+        sed -E -i 's/^[[:space:]]*#?[[:space:]]*(dtparam=([^#]*,)?spi=)[a-z]+/\1on/' "$BOOTCFG"
+    else
+        printf '\n[all]\ndtparam=spi=on\n' >> "$BOOTCFG"
+    fi
+    REBOOT=1
+    echo "enabled SPI in $BOOTCFG (backup: $BOOTCFG.claude-ticker.bak)"
 fi
 
 systemctl enable claude-ticker.service
 systemctl restart claude-ticker.service
 echo "installed; status: systemctl status claude-ticker   logs: journalctl -u claude-ticker -f"
+if [ -n "$REBOOT" ]; then
+    echo "SPI was just enabled; reboot for the display to work: sudo reboot"
+fi

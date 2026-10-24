@@ -187,7 +187,7 @@ The approved UI mockup is [`docs/ui-mockup.png`](docs/ui-mockup.png). **Treat it
 - Revisions:
   - 2026-10-23: sign-in screen with QR code added.
   - 2026-10-23: sign-in warning added; the stale footer became `STALE Mon 12:16` so both fit.
-  - 2026-10-23: converted from bump-ticker. The pregnancy designs are kept as `docs/ui-mockup-bump-ticker.png` and `docs/ui-mockup-original.png`.
+  - 2026-10-23: converted from bump-ticker. The earlier pregnancy designs were removed from `docs/` in the 2026-10-24 cleanup; they remain in git history.
 - **Visual language:**
   - Black on white. Generous whitespace.
   - Each row is a bold uppercase label on the left with the percentage on the right, then the bar, then the reset line in the small font.
@@ -212,7 +212,7 @@ The approved UI mockup is [`docs/ui-mockup.png`](docs/ui-mockup.png). **Treat it
 | Pins (BCM) | RST 17, DC 25, BUSY 24, PWR 18 (driven high at start; absent on older HAT revisions) |
 | Native orientation | 122×250 portrait; the code rotates 90° (or 270° when `flipped`) for landscape |
 
-- SPI must be enabled on the Pi: `dtparam=spi=on` in `/boot/firmware/config.txt`.
+- SPI must be enabled on the Pi: `dtparam=spi=on` in `/boot/firmware/config.txt`. `deploy/install.sh` does this: it uncomments or flips an existing `dtparam=spi` line, or appends one under `[all]`. It keeps a `.claude-ticker.bak` backup and asks for a reboot.
 - The Pi has **no real-time clock**, and it may reboot at any moment. Correct time depends on NTP after **every** boot. Wrong time also breaks TLS certificate checks and token expiry. Raspberry Pi OS's `fake-hwclock` restores the last shutdown time, so the year looks plausible even when the time is stale.
 - How the app handles this: on the hardware build, `SystemClock` is created with `require_sync_flag(TIMESYNC_FLAG)` and only trusts the time when both of these hold:
   - `/run/systemd/timesync/synchronized` exists. systemd-timesyncd creates it after an NTP sync, and it lives in `/run`, so every reboot clears it.
@@ -248,7 +248,7 @@ A support-free 3D-printable case lives in `hardware/case/`: `case.scad` is the p
 | Pi Zero 2 W | 64-bit Raspberry Pi OS | `aarch64-unknown-linux-gnu` |
 | Pi Zero / Zero W (original) | 32-bit Raspberry Pi OS | `arm-unknown-linux-gnueabihf` (ARMv6; **not** armv7) |
 
-Cross-compile with `cross` (needs Docker running): `cross build --release --features epd --target <target>`.
+Cross-compile with `cross` (needs Docker running): `CARGO_TARGET_DIR=target/cross cross build --release --features epd --target <target>`. The separate target dir stops the container from running build scripts compiled on the host against its older glibc. On the Pi, `dpkg --print-architecture` tells you the target: `armhf` → `arm-unknown-linux-gnueabihf`, `arm64` → `aarch64-unknown-linux-gnu`.
 
 TLS comes from `ureq`'s default rustls with the `ring` provider; `api` also uses `ring` directly for the login's SHA-256 and secure random numbers. `ring` compiles C in its build script, so even `cargo check` for a Linux target needs a C cross compiler. On macOS, use `scripts/zig-cc` (needs `brew install zig`); see §7.
 
@@ -270,7 +270,7 @@ cargo run --example preview --features preview -- 62 23 4 out/
 
 The Linux-target check needs `rustup target add aarch64-unknown-linux-gnu` once. It doesn't link, so no cross linker is required, only the C compiler shim for `ring`.
 
-The preview example writes `out/dashboard.png`, `out/dashboard-model.png`, `out/stale.png`, `out/expiry-warning.png`, `out/sign-in.png`, `out/waiting.png`, `out/error.png` and `out/mockup.png` at 3× scale. Open and inspect them after any change to `view`. Do not commit `out/`. At `62 23 4`, `out/mockup.png` is `docs/ui-mockup.png` pixel for pixel; copy it over when a layout change is approved.
+The preview example writes `out/dashboard.png`, `out/dashboard-model.png`, `out/stale.png`, `out/expiry-warning.png`, `out/sign-in.png`, `out/waiting.png`, `out/error.png` and `out/mockup.png` at 3× scale. Open and inspect them after any change to `view`. Do not commit `out/`. At `62 23 4`, `out/mockup.png` is `docs/ui-mockup.png` pixel for pixel; copy it over when a layout change is approved. The README shows the single screens from `docs/screens/`, which are the other seven PNGs at `62 23 4`; copy them over at the same time.
 
 Other percentages are worth eyeballing after layout changes, e.g. `0 0 0`, `100 100 100` and `5 97 50`.
 
