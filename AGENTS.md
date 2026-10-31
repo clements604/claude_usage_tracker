@@ -13,6 +13,7 @@ A small Rust program that runs on a **Raspberry Pi Zero / Zero 2 W** with a **Wa
 1. The rolling 5-hour **session** limit: percent used and when it resets.
 2. The **weekly** limit across all models: percent used and when it resets.
 3. A **model-specific weekly** limit (e.g. Opus), only when the plan has one.
+4. **Usage credits** ("extra usage"): percent of the monthly spending cap used and what is left of it, only when credits are turned on. Added at the owner's request on 2026-10-31.
 
 Each limit is a row with a progress bar. A footer shows when the numbers were fetched, and marks them `STALE` when old.
 
@@ -83,14 +84,15 @@ These live in `src/usage.rs`, and each has a unit test there. `tests/usage_api.r
 ### The data source
 
 - Endpoint: `GET https://api.anthropic.com/api/oauth/usage`, with `Authorization: Bearer <access token>` and `anthropic-beta: oauth-2025-04-20`. Claude Code's `/usage` uses the same endpoint. It is **undocumented** and can change without notice.
-- `tests/fixtures/usage-pro.json` is a real Pro-account response captured on 2026-10-23. If the shape changes, capture a new response and keep the old one as a regression case.
+- `tests/fixtures/usage-pro.json` is a real Pro-account response captured on 2026-10-23, with credits off. `tests/fixtures/usage-credits.json` is a real response captured on 2026-10-31 with credits on (A$25.90 of a A$40.00 monthly cap). If the shape changes, capture a new response with `claude-ticker --raw` and keep the old one as a regression case.
 
 ### Parsing (tolerant by design)
 
 - Every field is optional and unknown fields are ignored. Do **not** add `deny_unknown_fields` here; that rule is for config only.
 - Session: `five_hour.utilization`, falling back to the `limits[]` entry with `kind = "session"` (`percent`).
 - Weekly: `seven_day.utilization`, falling back to `limits[kind = "weekly_all"]`.
-- Model row: the first non-null of `seven_day_opus`, then `seven_day_sonnet`, then any `limits[kind = "weekly_<model>"]`. Its label is `WEEK <MODEL>`. Other objects in the response (`extra_usage`, codenamed fields) are not limits and must not become rows.
+- Model row: the first non-null of `seven_day_opus`, then `seven_day_sonnet`, then any `limits[kind = "weekly_<model>"]`. Its label is `WEEK <MODEL>`.
+- Credits row (`CREDITS`, always last): `extra_usage` when `is_enabled` is true (`used_credits` and `monthly_limit` in minor units, with `currency` and `decimal_places`), falling back to `spend` when `enabled` is true (`used` and `limit`, each `{amount_minor, currency, exponent}`). It needs a cap above zero; otherwise there is no row. Other objects in the response (`iguana_necktie`, other codenamed fields) are not limits and must not become rows.
 - A response with neither a session nor a weekly limit is a `ParseError::NoLimits`. A `resets_at` that is missing or invalid becomes `Reset::Unknown`, not an error.
 
 ### Display rules
@@ -100,6 +102,8 @@ These live in `src/usage.rs`, and each has a unit test there. `tests/usage_api.r
 - Time left (`Span`): `14m`, `2h 14m`, `3d 4h`. Part minutes round **up**, and a span is never negative.
 - Reset lines: `resets 14:30 (in 2h 14m)` when under a day away, otherwise `resets Fri 09:00 (in 3d 20h)`.
 - Sign-in warning: when the refresh token expires within `SIGN_IN_WARNING` (5 days), the footer shows `re-login in <span>` (`usage::sign_in_warning`, filled in by `app` from `UsageSource::sign_in_expires`). Unknown expiry means no warning.
+- Hostname: otherwise the footer's right side shows the device's hostname (`Status::host`, filled in by `app` from `App::with_host`; `main` reads `/proc/sys/kernel/hostname`). The sign-in warning takes its place when due. Non-ASCII and whitespace characters are dropped, and it is cut short to keep two characters clear of the left text (22 characters next to `STALE Mon 12:16`).
+- Credits: percent is spent ÷ cap, rounded and clamped like the others. The line under the bar is `$14.10 left of $40.00`. Amounts left are never negative. `$` is used for USD, AUD, CAD, NZD, SGD and HKD; other currencies are written as their code (`EUR 14.10`), since the fonts are ASCII-only. The API gives no date for the cap's reset, so none is shown.
 - Staleness: data older than `stale_minutes` is flagged `STALE`. Data older than `STALE_LIMIT_FACTOR` (6) × `stale_minutes` is `StatusError::Stale`, and the error screen replaces the numbers.
 
 ### Errors in the loop (`app`)
@@ -124,7 +128,7 @@ These live in `src/usage.rs`, and each has a unit test there. `tests/usage_api.r
 
 ## 4. Configuration
 
-Default path: `/etc/claude-ticker/config.toml`. Pass a different path as a CLI argument to override it. `claude-ticker --check [PATH]` validates the config, fetches usage once and prints it with the sign-in expiry, without touching the display. `claude-ticker login [PATH]` signs in and writes the credentials file the config names. The example shipped to new installs is `deploy/config.toml`; unit tests keep it valid and equal to the defaults, so update it when you add fields.
+Default path: `/etc/claude-ticker/config.toml`. Pass a different path as a CLI argument to override it. `claude-ticker --check [PATH]` validates the config, fetches usage once and prints it with the sign-in expiry, without touching the display. `claude-ticker --raw [PATH]` fetches once and prints the API's JSON body unparsed, for capturing new response shapes as fixtures (§3). `claude-ticker login [PATH]` signs in and writes the credentials file the config names. The example shipped to new installs is `deploy/config.toml`; unit tests keep it valid and equal to the defaults, so update it when you add fields.
 
 ```toml
 timezone = "Australia/Sydney"  # optional IANA name; omit for the OS timezone. Must be above any [section].
@@ -167,7 +171,7 @@ The display is **not** an LCD. Designs that assume one will look bad or wear out
 - 8 px side margin (`MARGIN`). Nothing may be clipped at the edges. Right-aligned text anchors at `TEXT_RIGHT`, the bar's last pixel column.
 - Fonts: `embedded_graphics::mono_font::ascii` only (`FONT_10X20`, `FONT_7X13_BOLD`, `FONT_6X10`). Monospace only, so widths are predictable. They are ASCII-only: no `·`, `…` or other non-ASCII characters in drawn text.
 - Times on the display are 24-hour `HH:MM` (`view::TIME_FORMAT`), in the configured timezone, with a weekday (`Fri 09:00`) once a day or more away.
-- Two rows use the `ROOMY` layout (large percentage). Three rows switch to `COMPACT`. Check the longest realistic strings fit: `WEEK SONNET`, `100%`, `resets Wed 23:59 (in 6d 23h)`, and the footer `STALE Wed 23:59` with `re-login in 23h 59m`. `view::tests::longest_strings_fit_inside_margins` and `footer_texts_never_meet` check this.
+- Two rows use the `ROOMY` layout (large percentage). Three rows switch to `COMPACT`. Four rows (model row and credits together) switch to the dense layout: label, a short detail (`Fri 09:00 (3d 20h)`, `14:30 (2h 14m)`, `reset 14:30` or `$14.10 left`) and the percentage on one line, then the bar, on a 27 px pitch. The short detail is right-aligned to `DENSE_DETAIL_RIGHT`, leaving room for `100%`. Check the longest realistic strings fit: `WEEK SONNET`, `100%`, `resets Wed 23:59 (in 6d 23h)`, `EUR 999999.99 left of EUR 999999.99`, and the footer `STALE Wed 23:59` with `re-login in 23h 59m` or a 63-character hostname. `view::tests::longest_strings_fit_inside_margins`, `dense_rows_keep_label_and_detail_apart` and `footer_texts_never_meet` check this.
 - After any layout change, regenerate the previews (§7) and look at them. A layout change is not done until the PNGs have been inspected.
 
 ### Reference design
@@ -176,15 +180,18 @@ The approved UI mockup is [`docs/ui-mockup.png`](docs/ui-mockup.png). **Treat it
 
 1. Dashboard, Pro: session and week.
 2. Dashboard with a model row (`WEEK OPUS`, compact layout).
-3. Stale: 40 minutes without an update.
-4. Stale, with the sign-in expiry warning at its longest (`re-login in 23h 59m`).
-5. Sign in: the QR code for `http://192.168.1.23:8080/k7Qp2xNa`, with the address written out and broken after the port.
-6. Waiting for time ("SETTING THE CLOCK").
-7. Error ("CAN'T GET USAGE"), shown when there is no sign-in page.
+3. Dashboard with a model row and credits (`CREDITS`, A$25.90 of A$40.00; dense four-row layout).
+4. Stale: 40 minutes without an update.
+5. Stale, with the sign-in expiry warning at its longest (`re-login in 23h 59m`).
+6. Sign in: the QR code for `http://192.168.1.23:8080/k7Qp2xNa`, with the address written out and broken after the port.
+7. Waiting for time ("SETTING THE CLOCK").
+8. Error ("CAN'T GET USAGE"), shown when there is no sign-in page.
 
 ![Approved UI mockup](docs/ui-mockup.png)
 
 - Revisions:
+  - 2026-10-31: usage credits row added (tile 3), with the dense four-row layout for when a model row is also present.
+  - 2026-10-31: hostname added to the footer's right side (`claude-ticker` in the mockup), giving way to the sign-in warning.
   - 2026-10-23: sign-in screen with QR code added.
   - 2026-10-23: sign-in warning added; the stale footer became `STALE Mon 12:16` so both fit.
   - 2026-10-23: converted from bump-ticker. The earlier pregnancy designs were removed from `docs/` in the 2026-10-24 cleanup; they remain in git history.
@@ -270,7 +277,7 @@ cargo run --example preview --features preview -- 62 23 4 out/
 
 The Linux-target check needs `rustup target add aarch64-unknown-linux-gnu` once. It doesn't link, so no cross linker is required, only the C compiler shim for `ring`.
 
-The preview example writes `out/dashboard.png`, `out/dashboard-model.png`, `out/stale.png`, `out/expiry-warning.png`, `out/sign-in.png`, `out/waiting.png`, `out/error.png` and `out/mockup.png` at 3× scale. Open and inspect them after any change to `view`. Do not commit `out/`. At `62 23 4`, `out/mockup.png` is `docs/ui-mockup.png` pixel for pixel; copy it over when a layout change is approved. The README shows the single screens from `docs/screens/`, which are the other seven PNGs at `62 23 4`; copy them over at the same time.
+The preview example writes `out/dashboard.png`, `out/dashboard-model.png`, `out/dashboard-four.png`, `out/dashboard-credits.png` (not in the mockup), `out/stale.png`, `out/expiry-warning.png`, `out/sign-in.png`, `out/waiting.png`, `out/error.png` and `out/mockup.png` at 3× scale. Open and inspect them after any change to `view`. Do not commit `out/`. At `62 23 4`, `out/mockup.png` is `docs/ui-mockup.png` pixel for pixel; copy it over when a layout change is approved. The README shows the single screens from `docs/screens/`, which are the other nine PNGs at `62 23 4`; copy them over at the same time.
 
 Other percentages are worth eyeballing after layout changes, e.g. `0 0 0`, `100 100 100` and `5 97 50`.
 
@@ -305,6 +312,7 @@ cargo clippy --all-targets --features simulator -- -D warnings   # when SDL2 is 
 | [ / ] | week −5 / +5 % |
 | ← / → | time −1 / +1 hour (redraw without fetching, so staleness and resets show) |
 | O | toggle the Opus weekly row |
+| C | toggle usage credits (A$25.90 of A$40.00) |
 | X | toggle network failures |
 | A | toggle "signed out": shows the sign-in QR screen; press again to play the phone finishing the sign-in |
 | L | toggle "sign-in expires in 2 days" (footer warning) |

@@ -8,7 +8,7 @@
 //! ```
 //!
 //! Keys: ↓/↑ session −/+5 %, [/] week −/+5 %, ←/→ time −/+1 h, O toggle the
-//! Opus weekly row, X toggle network failures, A toggle "signed out" (shows
+//! Opus weekly row, C toggle usage credits (A$25.90 of A$40.00), X toggle network failures, A toggle "signed out" (shows
 //! the sign-in QR code; press A again to play the phone finishing), L toggle
 //! "sign-in expires in 2 days", Space
 //! fetch now, W toggle "clock not synced yet", F force full refresh, Esc quit.
@@ -27,7 +27,7 @@ use claude_ticker::app::{App, AppSettings, Clock, SystemClock};
 use claude_ticker::config::{Config, DisplaySettings};
 use claude_ticker::simulator::SimPanel;
 use claude_ticker::source::{Portal, PortalError, SourceError, UsageSource};
-use claude_ticker::usage::{ModelQuota, Quota, Usage};
+use claude_ticker::usage::{Credits, ModelQuota, Money, Quota, Usage};
 use claude_ticker::view::TIME_FORMAT;
 use embedded_graphics_simulator::SimulatorEvent;
 use embedded_graphics_simulator::sdl2::Keycode;
@@ -67,6 +67,7 @@ struct FakeSource {
     session: Quota,
     week: Quota,
     opus: Option<Quota>,
+    credits: Option<Credits>,
     failure: Option<SourceError>,
     sign_in_expires: Option<DateTime<Utc>>,
 }
@@ -81,8 +82,22 @@ impl FakeSource {
             session: quota(62.0, TimeDelta::minutes(2 * 60 + 14)),
             week: quota(23.0, TimeDelta::hours(3 * 24 + 20)),
             opus: None,
+            credits: None,
             failure: None,
             sign_in_expires: None,
+        }
+    }
+
+    /// The captured real response's numbers: A$25.90 of A$40.00.
+    fn credits_default() -> Credits {
+        let aud = |minor| Money {
+            minor,
+            decimals: 2,
+            currency: "AUD".to_owned(),
+        };
+        Credits {
+            used: aud(2590),
+            limit: aud(4000),
         }
     }
 
@@ -122,6 +137,7 @@ impl UsageSource for FakeSource {
                 model: "OPUS".to_owned(),
                 quota,
             }),
+            credits: self.credits.clone(),
         })
     }
 
@@ -215,15 +231,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let source = FakeSource::new(clock.now());
     let signed_in = std::rc::Rc::default();
     let portal = FakePortal(std::rc::Rc::clone(&signed_in));
-    let mut app =
-        App::new(source, AppSettings::from(&display), panel).with_portal(Box::new(portal));
+    let mut app = App::new(source, AppSettings::from(&display), panel)
+        .with_portal(Box::new(portal))
+        .with_host("claude-ticker");
 
     println!("claude-ticker simulator (fake usage, no network)");
     if sync_at.is_some() {
         println!("clock syncs in {}s (fake NTP)", opts.sync_seconds);
     }
     println!(
-        "keys: ↓/↑ session  [/] week  ←/→ ±1h  O opus row  X net fail  A signed out  L sign-in expiry  Space fetch  W sync  F full  Esc quit"
+        "keys: ↓/↑ session  [/] week  ←/→ ±1h  O opus row  C credits  X net fail  A signed out  L sign-in expiry  Space fetch  W sync  F full  Esc quit"
     );
 
     let mut next_fetch = Instant::now();
@@ -289,6 +306,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     src.opus = match src.opus {
                         Some(_) => None,
                         None => Some(src.opus_default()),
+                    };
+                }
+                Keycode::C => {
+                    src.credits = match src.credits {
+                        Some(_) => None,
+                        None => Some(FakeSource::credits_default()),
                     };
                 }
                 Keycode::X => {

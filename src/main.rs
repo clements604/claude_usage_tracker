@@ -1,5 +1,8 @@
-//! `claude-ticker [--check | login] [CONFIG]` — load the config and run the
-//! display.
+//! `claude-ticker [--check | --raw | login] [CONFIG]` — load the config and
+//! run the display.
+//!
+//! `--raw` fetches once and prints the usage API's JSON body as received, so
+//! a new response shape can be captured as a test fixture.
 //!
 //! `login` signs the Pi in to Claude: it prints a link to open on any device,
 //! reads back the code shown after approving, and saves the credentials where
@@ -18,11 +21,13 @@ use std::process::ExitCode;
 use claude_ticker::config::{self, Config};
 
 fn main() -> ExitCode {
-    let (mut check, mut login) = (false, false);
+    let (mut check, mut raw, mut login) = (false, false, false);
     let mut path = PathBuf::from(config::DEFAULT_PATH);
     for arg in std::env::args_os().skip(1) {
         if arg == "--check" {
             check = true;
+        } else if arg == "--raw" {
+            raw = true;
         } else if arg == "login" {
             login = true;
         } else {
@@ -33,6 +38,8 @@ fn main() -> ExitCode {
     let result = Config::load(&path).map_err(Into::into).and_then(|config| {
         if login {
             login_then_check(&config)
+        } else if raw {
+            print_raw(&config)
         } else if check {
             print_status(&config)
         } else {
@@ -60,6 +67,10 @@ fn run(config: Config) -> Result<(), Box<dyn Error>> {
     let panel = EpdPanel::new(config.display.flipped)?;
     let source = ApiSource::new(&config.credentials);
     let mut app = App::new(source, AppSettings::from(&config.display), panel);
+    // Shown in the footer, so you know which Pi to SSH into.
+    if let Ok(host) = std::fs::read_to_string("/proc/sys/kernel/hostname") {
+        app = app.with_host(host.trim());
+    }
     if let Some(port) = config.sign_in_port {
         // The portal only opens once the clock is trusted, so `now` is too.
         let page_clock = clock.clone();
@@ -111,7 +122,7 @@ fn print_status(config: &Config) -> Result<(), Box<dyn Error>> {
     use claude_ticker::api::ApiSource;
     use claude_ticker::app::{Clock, SystemClock};
     use claude_ticker::source::UsageSource;
-    use claude_ticker::usage::Reset;
+    use claude_ticker::usage::{Detail, Reset};
     use claude_ticker::view::TIME_FORMAT;
 
     let clock = SystemClock::new(config.timezone);
@@ -120,12 +131,15 @@ fn print_status(config: &Config) -> Result<(), Box<dyn Error>> {
     let usage = source.fetch(now)?;
     let status = usage.status(now, now, TimeDelta::MAX, |t| clock.local(t))?;
     for row in &status.rows {
-        let reset = match row.reset {
-            Reset::At { at, left } => format!("resets {} (in {left})", at.format("%a %H:%M")),
-            Reset::Passed { at } => format!("reset at {}", at.format(TIME_FORMAT)),
-            Reset::Unknown => "no reset time".to_owned(),
+        let detail = match &row.detail {
+            Detail::Reset(Reset::At { at, left }) => {
+                format!("resets {} (in {left})", at.format("%a %H:%M"))
+            }
+            Detail::Reset(Reset::Passed { at }) => format!("reset at {}", at.format(TIME_FORMAT)),
+            Detail::Reset(Reset::Unknown) => "no reset time".to_owned(),
+            Detail::Credits { left, limit } => format!("{left} left of {limit} this month"),
         };
-        println!("{:<12} {:>3}%  {reset}", row.label, row.percent);
+        println!("{:<12} {:>3}%  {detail}", row.label, row.percent);
     }
     let zone = config
         .timezone
@@ -135,6 +149,22 @@ fn print_status(config: &Config) -> Result<(), Box<dyn Error>> {
         config.credentials.display()
     );
     Ok(())
+}
+
+/// Fetch once and print the usage API's JSON body unparsed.
+#[cfg(feature = "net")]
+fn print_raw(config: &Config) -> Result<(), Box<dyn Error>> {
+    use claude_ticker::api::ApiSource;
+    use claude_ticker::app::{Clock, SystemClock};
+
+    let now = SystemClock::new(config.timezone).now();
+    println!("{}", ApiSource::new(&config.credentials).fetch_raw(now)?);
+    Ok(())
+}
+
+#[cfg(not(feature = "net"))]
+fn print_raw(_config: &Config) -> Result<(), Box<dyn Error>> {
+    Err("built without the `net` feature, so it cannot fetch".into())
 }
 
 /// Without the network client there is nothing to fetch; the config parsed.

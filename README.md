@@ -6,7 +6,7 @@
   <img src="docs/screens/dashboard.png" alt="The claude-ticker dashboard: session 62%, resets 14:30; week 23%, resets Friday 09:00" width="500">
 </p>
 
-If you use Claude on a **Pro or Max** plan, you have a 5-hour session limit and a weekly limit. claude-ticker shows both on a 2.13" e-paper screen next to your desk. It shows how much of each you've used, when each one resets, and a weekly limit for a specific model (such as Opus) if your plan has one. It updates every 5 minutes.
+If you use Claude on a **Pro or Max** plan, you have a 5-hour session limit and a weekly limit. claude-ticker shows both on a 2.13" e-paper screen next to your desk. It shows how much of each you've used, when each one resets, a weekly limit for a specific model (such as Opus) if your plan has one, and how much of your monthly usage-credits budget you've spent if you've turned credits on. It updates every 5 minutes.
 
 It runs on a Raspberry Pi Zero W or Zero 2 W with a Waveshare e-paper HAT, which is a screen that plugs straight onto the Pi's pins. The Pi and screen together cost roughly US$35–45. E-paper keeps its image with no power and doesn't glow, so the display stays readable all day without lighting up your desk.
 
@@ -34,10 +34,12 @@ It runs on a Raspberry Pi Zero W or Zero 2 W with a Waveshare e-paper HAT, which
 
 | Screen | When you see it |
 |---|---|
-| <img src="docs/screens/dashboard.png" alt="Dashboard" width="300"> | **Dashboard.** Your 5-hour **session** and **weekly** usage, each with a bar and the time it resets. The bottom line shows when the numbers were last fetched. |
+| <img src="docs/screens/dashboard.png" alt="Dashboard" width="300"> | **Dashboard.** Your 5-hour **session** and **weekly** usage, each with a bar and the time it resets. The bottom line shows when the numbers were last fetched, and the Pi's hostname (handy for `ssh you@<hostname>.local`). |
 | <img src="docs/screens/dashboard-model.png" alt="Dashboard with a model row" width="300"> | **Dashboard with a model limit.** If your plan has a separate weekly limit for one model, such as Opus, it gets a third row. |
+| <img src="docs/screens/dashboard-credits.png" alt="Dashboard with usage credits" width="300"> | **Usage credits.** If you've turned on usage credits (extra usage you pay for once you hit your plan's limits), a **CREDITS** row shows how much of your monthly spending cap you've used, and how much is left. |
+| <img src="docs/screens/dashboard-four.png" alt="Dashboard with four rows" width="300"> | **Four rows.** With both a model limit and usage credits, the rows get closer together and each reset time moves up beside its label. |
 | <img src="docs/screens/stale.png" alt="Stale data" width="300"> | **STALE.** The Pi hasn't been able to fetch new numbers for a while (15 minutes by default), usually because of a Wi-Fi drop. It keeps showing the last numbers and marks when they're from. It clears by itself at the next successful fetch. |
-| <img src="docs/screens/expiry-warning.png" alt="Sign-in expiry warning" width="300"> | **re-login in ...** The Pi's sign-in expires in less than 5 days. [Sign in again](#signing-in-again) before then. |
+| <img src="docs/screens/expiry-warning.png" alt="Sign-in expiry warning" width="300"> | **re-login in ...** The Pi's sign-in expires in less than 5 days. [Sign in again](#signing-in-again) before then. This takes the hostname's place until you do. |
 | <img src="docs/screens/sign-in.png" alt="Sign-in QR code" width="300"> | **SIGN IN.** The Pi isn't signed in to Claude. Scan the QR code with your phone to sign in. See [step 6](#6-sign-in-to-claude). |
 | <img src="docs/screens/waiting.png" alt="Setting the clock" width="300"> | **SETTING THE CLOCK.** Shown briefly after the Pi turns on. The Pi has no battery-backed clock, so it waits until it has the correct time from the internet. |
 | <img src="docs/screens/error.png" alt="Error screen" width="300"> | **CAN'T GET USAGE.** Something needs your attention. The message says what went wrong and usually how to fix it. See [Troubleshooting](#troubleshooting). |
@@ -292,11 +294,35 @@ The last line deletes your settings and the Pi's sign-in.
 
 ## Troubleshooting
 
-Start with the logs. They usually say exactly what's wrong:
+### Reading the logs
+
+Start with the logs. They usually say exactly what's wrong. Run these in an SSH session on the Pi:
+
+| Command | What it shows |
+|---|---|
+| `systemctl status claude-ticker` | Whether the service is running (`active (running)`) or has failed, plus its last few log lines. |
+| `journalctl -u claude-ticker -n 50 --no-pager` | The last 50 log lines. |
+| `journalctl -u claude-ticker -f` | New log lines as they happen. Press **Ctrl+C** to stop. |
+| `journalctl -u claude-ticker -b --no-pager` | Everything since the Pi last started. |
+
+Look for lines starting with `claude-ticker:`, which are the program's own error messages, and lines mentioning `status=` or `Failed`, which come from systemd when the program couldn't start or stopped.
+
+**If the service won't start**, run the program directly so its errors print to your terminal:
 
 ```sh
-journalctl -u claude-ticker -n 50
+sudo systemctl stop claude-ticker
+sudo /usr/local/bin/claude-ticker          # press Ctrl+C to stop it
+sudo systemctl start claude-ticker
 ```
+
+After several failed starts in a row, systemd stops retrying and reports `start request repeated too quickly`. Once you've fixed the problem, start it again with:
+
+```sh
+sudo systemctl reset-failed claude-ticker
+sudo systemctl restart claude-ticker
+```
+
+### Common problems
 
 <details>
 <summary><b>The screen stays blank</b></summary>
@@ -426,6 +452,7 @@ cargo run --example simulator --features simulator -- --poll-seconds 5
 | ] / [ | Week usage +5% / −5% |
 | → / ← | Move time forward / back one hour |
 | O | Show or hide the Opus row |
+| C | Show or hide a usage credits row |
 | X | Simulate network failures |
 | A | Sign out (shows the QR screen); press again to finish a simulated sign-in |
 | L | Simulate a sign-in that expires in 2 days |

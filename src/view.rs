@@ -6,9 +6,11 @@
 //! developing is exactly what the e-paper gets.
 //!
 //! The dashboard stacks one row per limit: label and percentage, a bar, then
-//! when it resets. Two rows (session and week, the usual Pro case) get roomy
-//! spacing and a large percentage; a third, model-specific row switches to a
-//! compact layout so everything still fits in 122 px.
+//! when it resets (or, for usage credits, what is left). Two rows (session
+//! and week, the usual Pro case) get roomy spacing and a large percentage; a
+//! third row (a model-specific limit or credits) switches to a compact
+//! layout, and a fourth to a dense one that moves the reset onto the label
+//! line, so everything still fits in 122 px.
 
 use embedded_graphics::image::{Image, ImageRaw};
 use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_7X13_BOLD, FONT_10X20};
@@ -20,7 +22,7 @@ use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use qrcodegen::{QrCode, QrCodeEcc};
 
-use crate::usage::{Reset, Row, Status};
+use crate::usage::{Detail, Reset, Row, Status};
 
 /// Side margin in pixels. Nothing is drawn closer to the edge than this.
 pub const MARGIN: i32 = 8;
@@ -70,6 +72,14 @@ const COMPACT: RowLayout = RowLayout {
     reset_dy: 24,
 };
 
+/// Four rows: label, short detail and percentage on one line, then the bar.
+const DENSE_TOP: i32 = 2;
+const DENSE_PITCH: i32 = 27;
+const DENSE_BAR_DY: i32 = 15;
+/// Right edge of the short detail: clear of the widest percentage, `100%`
+/// in `FONT_7X13_BOLD`, plus one character.
+const DENSE_DETAIL_RIGHT: i32 = TEXT_RIGHT - 4 * 7 - 6;
+
 /// Something to put on the display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen<'a> {
@@ -111,9 +121,15 @@ fn draw_dashboard<D>(s: &Status, t: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = BinaryColor>,
 {
-    let layout = if s.rows.len() > 2 { &COMPACT } else { &ROOMY };
-    for (i, row) in s.rows.iter().take(3).enumerate() {
-        draw_row(row, layout, layout.top + layout.pitch * i as i32, t)?;
+    if s.rows.len() > 3 {
+        for (i, row) in s.rows.iter().take(4).enumerate() {
+            draw_dense_row(row, DENSE_TOP + DENSE_PITCH * i as i32, t)?;
+        }
+    } else {
+        let layout = if s.rows.len() > 2 { &COMPACT } else { &ROOMY };
+        for (i, row) in s.rows.iter().enumerate() {
+            draw_row(row, layout, layout.top + layout.pitch * i as i32, t)?;
+        }
     }
 
     text(
@@ -124,10 +140,9 @@ where
         Alignment::Left,
         t,
     )?;
-    if let Some(left) = s.sign_in_left {
-        let warning = format!("re-login in {left}");
+    if let Some(right) = footer_right(s) {
         text(
-            &warning,
+            &right,
             &FONT_6X10,
             TEXT_RIGHT,
             FOOTER_Y,
@@ -136,6 +151,27 @@ where
         )?;
     }
     Ok(())
+}
+
+/// `FONT_6X10` characters that fit across the footer, margin to margin.
+const FOOTER_CHARS: usize = ((TEXT_RIGHT + 1 - MARGIN) / 6) as usize;
+
+/// `re-login in 2d 3h` when the sign-in expires soon, since that needs
+/// doing; otherwise the hostname, cut short to keep two characters clear of
+/// the left text.
+fn footer_right(s: &Status) -> Option<String> {
+    if let Some(left) = s.sign_in_left {
+        return Some(format!("re-login in {left}"));
+    }
+    let room = FOOTER_CHARS.saturating_sub(footer_left(s).len() + 2);
+    let host: String = s
+        .host
+        .as_deref()?
+        .chars()
+        .filter(char::is_ascii_graphic)
+        .take(room)
+        .collect();
+    (!host.is_empty()).then_some(host)
 }
 
 fn draw_row<D>(row: &Row, l: &RowLayout, y: i32, t: &mut D) -> Result<(), D::Error>
@@ -154,13 +190,54 @@ where
     text(&pct, l.percent_font, TEXT_RIGHT, y, Alignment::Right, t)?;
     progress_bar(row.percent, y + l.bar_dy, t)?;
     text(
-        &reset_line(row.reset),
+        &detail_line(&row.detail),
         &FONT_6X10,
         MARGIN,
         y + l.reset_dy,
         Alignment::Left,
         t,
     )
+}
+
+/// One row of four: the short detail sits between label and percentage.
+fn draw_dense_row<D>(row: &Row, y: i32, t: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    text(&row.label, &FONT_7X13_BOLD, MARGIN, y, Alignment::Left, t)?;
+    let pct = format!("{}%", row.percent);
+    text(&pct, &FONT_7X13_BOLD, TEXT_RIGHT, y, Alignment::Right, t)?;
+    text(
+        &short_detail(&row.detail),
+        &FONT_6X10,
+        DENSE_DETAIL_RIGHT,
+        y + 2,
+        Alignment::Right,
+        t,
+    )?;
+    progress_bar(row.percent, y + DENSE_BAR_DY, t)
+}
+
+/// The line under a bar: when it resets, or `$14.10 left of $40.00`.
+fn detail_line(detail: &Detail) -> String {
+    match detail {
+        Detail::Reset(reset) => reset_line(*reset),
+        Detail::Credits { left, limit } => format!("{left} left of {limit}"),
+    }
+}
+
+/// [`detail_line`] cut down to fit beside the label: `14:30 (2h 14m)`,
+/// `Fri 09:00 (3d 20h)`, `reset 14:30`, or `$14.10 left`.
+fn short_detail(detail: &Detail) -> String {
+    match detail {
+        Detail::Reset(Reset::At { at, left }) if left.minutes() < 24 * 60 => {
+            format!("{} ({left})", at.format(TIME_FORMAT))
+        }
+        Detail::Reset(Reset::At { at, left }) => format!("{} ({left})", at.format("%a %H:%M")),
+        Detail::Reset(Reset::Passed { at }) => format!("reset {}", at.format(TIME_FORMAT)),
+        Detail::Reset(Reset::Unknown) => String::new(),
+        Detail::Credits { left, .. } => format!("{left} left"),
+    }
 }
 
 /// `updated 12:16`, or `STALE Mon 12:16` once the numbers are old (with the
@@ -387,7 +464,7 @@ fn wrap(text: &str, max: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::framebuffer::Framebuffer;
-    use crate::usage::Span;
+    use crate::usage::{Money, Span};
     use chrono::NaiveDateTime;
     use embedded_graphics::primitives::Rectangle;
 
@@ -425,7 +502,27 @@ mod tests {
         Row {
             label: label.to_owned(),
             percent,
-            reset,
+            detail: Detail::Reset(reset),
+        }
+    }
+
+    fn money(minor: i64, currency: &str) -> Money {
+        Money {
+            minor,
+            decimals: 2,
+            currency: currency.to_owned(),
+        }
+    }
+
+    /// Credits at their widest: a non-dollar currency and big amounts.
+    fn credits_row() -> Row {
+        Row {
+            label: "CREDITS".to_owned(),
+            percent: 100,
+            detail: Detail::Credits {
+                left: money(99_999_999, "EUR"),
+                limit: money(99_999_999, "EUR"),
+            },
         }
     }
 
@@ -442,17 +539,21 @@ mod tests {
             row("SESSION", 100, passed),
             row("WEEK", 100, far),
             row("WEEK SONNET", 100, far),
+            credits_row(),
         ];
-        for n in 1..=3 {
+        for n in 1..=4 {
             for stale in [false, true] {
                 for sign_in_left in [None, Some(Span::from_minutes(23 * 60 + 59))] {
-                    let s = Status {
-                        rows: rows[..n].to_vec(),
-                        updated: naive("2026-10-21 23:59"),
-                        stale,
-                        sign_in_left,
-                    };
-                    assert_within_margins(Screen::Dashboard(&s));
+                    for host in [None, Some("w".repeat(63))] {
+                        let s = Status {
+                            rows: rows[..n].to_vec(),
+                            updated: naive("2026-10-21 23:59"),
+                            stale,
+                            sign_in_left,
+                            host,
+                        };
+                        assert_within_margins(Screen::Dashboard(&s));
+                    }
                 }
             }
         }
@@ -471,7 +572,49 @@ mod tests {
             let last_bottom = l.top + l.pitch * (rows - 1) + l.reset_dy + 10;
             assert!(last_bottom < FOOTER_Y, "{last_bottom}");
         }
+        const { assert!(DENSE_TOP + DENSE_PITCH * 3 + DENSE_BAR_DY + (BAR_H as i32) < FOOTER_Y) };
         const { assert!(FOOTER_Y + 10 <= 122) };
+    }
+
+    #[test]
+    fn dense_rows_keep_label_and_detail_apart() {
+        let far = Reset::At {
+            at: naive("2026-10-21 23:59"),
+            left: Span::from_minutes(6 * 24 * 60 + 23 * 60 + 59),
+        };
+        let soon = Reset::At {
+            at: naive("2026-10-21 23:59"),
+            left: Span::from_minutes(23 * 60 + 59),
+        };
+        let passed = Reset::Passed {
+            at: naive("2026-10-21 23:59"),
+        };
+        let mut rows: Vec<Row> = [far, soon, passed, Reset::Unknown]
+            .into_iter()
+            .map(|r| row("WEEK SONNET", 100, r))
+            .collect();
+        rows.push(credits_row());
+        for r in &rows {
+            let label_end = MARGIN + 7 * r.label.len() as i32;
+            let detail = short_detail(&r.detail);
+            let detail_start = DENSE_DETAIL_RIGHT - 6 * detail.len() as i32;
+            // At least one character of space between them.
+            assert!(label_end + 6 <= detail_start, "{} / {detail}", r.label);
+        }
+        assert_eq!(short_detail(&rows[0].detail), "Wed 23:59 (6d 23h)");
+        assert_eq!(short_detail(&rows[1].detail), "23:59 (23h 59m)");
+        assert_eq!(short_detail(&rows[2].detail), "reset 23:59");
+        assert_eq!(short_detail(&rows[4].detail), "EUR 999999.99 left");
+    }
+
+    #[test]
+    fn credits_line_says_what_is_left() {
+        let d = Detail::Credits {
+            left: money(1410, "AUD"),
+            limit: money(4000, "AUD"),
+        };
+        assert_eq!(detail_line(&d), "$14.10 left of $40.00");
+        assert_eq!(short_detail(&d), "$14.10 left");
     }
 
     #[test]
@@ -497,16 +640,43 @@ mod tests {
 
     #[test]
     fn footer_texts_never_meet() {
-        let s = Status {
+        let mut s = Status {
             rows: Vec::new(),
             updated: naive("2026-10-21 23:59"),
             stale: true,
             sign_in_left: None,
+            host: Some("w".repeat(63)),
         };
         let longest_left = footer_left(&s).len() as i32;
         let longest_right = "re-login in 23h 59m".len() as i32;
         // FONT_6X10 is 6 px per character; keep at least two characters apart.
         assert!(MARGIN + 6 * (longest_left + 2) <= TEXT_RIGHT - 6 * longest_right);
+        for stale in [true, false] {
+            s.stale = stale;
+            let host = footer_right(&s).unwrap().len();
+            assert_eq!(footer_left(&s).len() + 2 + host, FOOTER_CHARS);
+        }
+    }
+
+    #[test]
+    fn footer_shows_host_unless_sign_in_needs_renewing() {
+        let mut s = Status {
+            rows: Vec::new(),
+            updated: naive("2026-10-21 23:59"),
+            stale: false,
+            sign_in_left: None,
+            host: Some("claude-ticker".to_owned()),
+        };
+        assert_eq!(footer_right(&s).as_deref(), Some("claude-ticker"));
+        s.sign_in_left = Some(Span::from_minutes(90));
+        assert_eq!(footer_right(&s).as_deref(), Some("re-login in 1h 30m"));
+        s.sign_in_left = None;
+        s.host = Some("caf\u{e9} \n".to_owned());
+        assert_eq!(footer_right(&s).as_deref(), Some("caf"));
+        s.host = Some(" ".to_owned());
+        assert_eq!(footer_right(&s), None);
+        s.host = None;
+        assert_eq!(footer_right(&s), None);
     }
 
     #[test]

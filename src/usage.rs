@@ -46,6 +46,51 @@ pub struct ModelQuota {
     pub quota: Quota,
 }
 
+/// Usage credits ("extra usage"): paid usage once the plan's limits are hit,
+/// up to a monthly spending cap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Credits {
+    /// Spent so far this month.
+    pub used: Money,
+    /// The monthly cap.
+    pub limit: Money,
+}
+
+/// An amount of money in minor units (cents), as the API reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Money {
+    /// Amount in minor units, e.g. `2590` for 25.90.
+    pub minor: i64,
+    /// Digits after the decimal point: 2 for cents.
+    pub decimals: u32,
+    /// ISO 4217 code, e.g. `AUD`; empty if the API gave none.
+    pub currency: String,
+}
+
+/// Currencies written with a plain `$`. The panel's fonts are ASCII-only,
+/// so others (`€`, `£`, `¥`) are written as their code instead.
+const DOLLAR_CURRENCIES: [&str; 6] = ["USD", "AUD", "CAD", "NZD", "SGD", "HKD"];
+
+/// Most decimals honoured; more would overflow `10^decimals`.
+const MAX_DECIMALS: u32 = 6;
+
+impl fmt::Display for Money {
+    /// `$14.10`, `EUR 14.10`, or `14.10` with no currency.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if DOLLAR_CURRENCIES.contains(&self.currency.as_str()) {
+            f.write_str("$")?;
+        } else if !self.currency.is_empty() {
+            write!(f, "{} ", self.currency)?;
+        }
+        let unit = 10_i64.pow(self.decimals.min(MAX_DECIMALS));
+        let (whole, frac) = (self.minor / unit, self.minor % unit);
+        match self.decimals.min(MAX_DECIMALS) {
+            0 => write!(f, "{whole}"),
+            d => write!(f, "{whole}.{frac:0width$}", width = d as usize),
+        }
+    }
+}
+
 /// Everything one fetch of the usage endpoint tells us.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Usage {
@@ -55,6 +100,8 @@ pub struct Usage {
     pub weekly: Option<Quota>,
     /// A model-specific weekly limit, if the plan has one.
     pub model: Option<ModelQuota>,
+    /// Usage credits, when they are turned on and have a monthly cap.
+    pub credits: Option<Credits>,
 }
 
 /// Why a usage response could not be read.
@@ -99,10 +146,15 @@ impl Usage {
         if session.is_none() && weekly.is_none() {
             return Err(ParseError::NoLimits);
         }
+        let credits = v
+            .get("extra_usage")
+            .and_then(extra_usage)
+            .or_else(|| v.get("spend").and_then(spend));
         Ok(Self {
             session,
             weekly,
             model,
+            credits,
         })
     }
 
@@ -150,11 +202,11 @@ impl Usage {
             Row {
                 label,
                 percent,
-                reset,
+                detail: Detail::Reset(reset),
             }
         };
 
-        let mut rows = Vec::with_capacity(3);
+        let mut rows = Vec::with_capacity(4);
         if let Some(q) = &self.session {
             rows.push(row("SESSION".to_owned(), q));
         }
@@ -164,13 +216,78 @@ impl Usage {
         if let Some(m) = &self.model {
             rows.push(row(format!("WEEK {}", m.model), &m.quota));
         }
+        if let Some(c) = &self.credits {
+            rows.push(credits_row(c));
+        }
         Ok(Status {
             rows,
             updated: local(fetched_at),
             stale: age > stale_after,
             sign_in_left: None,
+            host: None,
         })
     }
+}
+
+/// `CREDITS`: percent of the monthly cap spent, and what is left of it.
+fn credits_row(c: &Credits) -> Row {
+    // Checked above zero when parsed; f64 is exact far beyond any real cap.
+    let percent = clamp_percent(c.used.minor as f64 * 100.0 / c.limit.minor.max(1) as f64);
+    Row {
+        label: "CREDITS".to_owned(),
+        percent,
+        detail: Detail::Credits {
+            left: Money {
+                minor: c.limit.minor.saturating_sub(c.used.minor).max(0),
+                ..c.limit.clone()
+            },
+            limit: c.limit.clone(),
+        },
+    }
+}
+
+/// `extra_usage`: `{"is_enabled": true, "monthly_limit": 4000,
+/// "used_credits": 2590.0, "currency": "AUD", "decimal_places": 2}`.
+fn extra_usage(e: &Value) -> Option<Credits> {
+    if e.get("is_enabled")?.as_bool() != Some(true) {
+        return None;
+    }
+    let currency = e.get("currency").and_then(Value::as_str).unwrap_or("");
+    let decimals = e.get("decimal_places").and_then(Value::as_u64).unwrap_or(2);
+    let money = |key| money(e.get(key)?, currency, decimals);
+    credits(money("used_credits")?, money("monthly_limit")?)
+}
+
+/// `spend`: `{"enabled": true, "used": {"amount_minor": 2590, "currency":
+/// "AUD", "exponent": 2}, "limit": {...}}`.
+fn spend(s: &Value) -> Option<Credits> {
+    if s.get("enabled")?.as_bool() != Some(true) {
+        return None;
+    }
+    let amount = |key: &str| {
+        let a = s.get(key)?;
+        let currency = a.get("currency").and_then(Value::as_str).unwrap_or("");
+        let decimals = a.get("exponent").and_then(Value::as_u64).unwrap_or(2);
+        money(a.get("amount_minor")?, currency, decimals)
+    };
+    credits(amount("used")?, amount("limit")?)
+}
+
+/// Credits only make a row with a cap to measure against.
+fn credits(used: Money, limit: Money) -> Option<Credits> {
+    (limit.minor > 0).then_some(Credits { used, limit })
+}
+
+fn money(minor: &Value, currency: &str, decimals: u64) -> Option<Money> {
+    let minor = minor.as_f64().filter(|m| m.is_finite())?;
+    Some(Money {
+        // Saturating cast; amounts are whole minor units in practice.
+        minor: minor.round().max(0.0) as i64,
+        decimals: u32::try_from(decimals)
+            .unwrap_or(MAX_DECIMALS)
+            .min(MAX_DECIMALS),
+        currency: currency.to_owned(),
+    })
 }
 
 fn named(v: &Value, field: &str) -> Option<Quota> {
@@ -205,7 +322,7 @@ fn clamp_percent(p: f64) -> u8 {
 /// What the dashboard shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Status {
-    /// Session, weekly and model rows, in that order; absent limits are
+    /// Session, weekly, model and credits rows, in that order; absent ones are
     /// left out.
     pub rows: Vec<Row>,
     /// Local time of the fetch these numbers came from.
@@ -216,6 +333,9 @@ pub struct Status {
     /// about (see [`sign_in_warning`]). [`Usage::status`] leaves it `None`;
     /// the app fills it in from the source.
     pub sign_in_left: Option<Span>,
+    /// The device's hostname, shown in the footer so you know which Pi to
+    /// SSH into. [`Usage::status`] leaves it `None`; the app fills it in.
+    pub host: Option<String>,
 }
 
 /// How long until the sign-in expires at `expires`, if that is within
@@ -229,12 +349,37 @@ pub fn sign_in_warning(expires: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Op
 /// One limit on the dashboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
-    /// `SESSION`, `WEEK` or `WEEK OPUS`.
+    /// `SESSION`, `WEEK`, `WEEK OPUS` or `CREDITS`.
     pub label: String,
     /// Percent used, 0–100.
     pub percent: u8,
-    /// When it resets.
-    pub reset: Reset,
+    /// The line under the bar.
+    pub detail: Detail,
+}
+
+impl Row {
+    /// When the limit resets; `None` for the credits row.
+    pub fn reset(&self) -> Option<Reset> {
+        match self.detail {
+            Detail::Reset(r) => Some(r),
+            Detail::Credits { .. } => None,
+        }
+    }
+}
+
+/// What a row says under its bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Detail {
+    /// A rate limit: when it resets.
+    Reset(Reset),
+    /// Usage credits: what is left of the monthly cap. The API gives no
+    /// date for the cap's reset.
+    Credits {
+        /// Cap minus spent, never negative.
+        left: Money,
+        /// The monthly cap.
+        limit: Money,
+    },
 }
 
 /// When a limit resets, relative to now.
@@ -387,6 +532,100 @@ mod tests {
         assert_eq!(s.rows[2].percent, 8);
     }
 
+    fn money(minor: i64, currency: &str) -> Money {
+        Money {
+            minor,
+            decimals: 2,
+            currency: currency.to_owned(),
+        }
+    }
+
+    #[test]
+    fn credits_come_from_extra_usage_in_minor_units() {
+        let json = r#"{
+            "five_hour": {"utilization": 9, "resets_at": null},
+            "extra_usage": {"is_enabled": true, "monthly_limit": 4000, "used_credits": 2590.0,
+                            "utilization": 64.75, "currency": "AUD", "decimal_places": 2},
+            "spend": {"enabled": true, "used": {"amount_minor": 1, "currency": "USD", "exponent": 2},
+                      "limit": {"amount_minor": 2, "currency": "USD", "exponent": 2}}
+        }"#;
+        let u = Usage::from_json(json).unwrap();
+        assert_eq!(
+            u.credits,
+            Some(Credits {
+                used: money(2590, "AUD"),
+                limit: money(4000, "AUD"),
+            })
+        );
+        let s = status(json, NOW);
+        let row = s.rows.last().unwrap();
+        assert_eq!((row.label.as_str(), row.percent), ("CREDITS", 65));
+        assert_eq!(
+            row.detail,
+            Detail::Credits {
+                left: money(1410, "AUD"),
+                limit: money(4000, "AUD")
+            }
+        );
+        assert_eq!(row.reset(), None);
+    }
+
+    #[test]
+    fn credits_fall_back_to_spend() {
+        let json = r#"{
+            "five_hour": {"utilization": 9, "resets_at": null},
+            "extra_usage": null,
+            "spend": {"enabled": true, "used": {"amount_minor": 500, "currency": "USD", "exponent": 2},
+                      "limit": {"amount_minor": 2000, "currency": "USD", "exponent": 2}}
+        }"#;
+        let c = Usage::from_json(json).unwrap().credits.unwrap();
+        assert_eq!((c.used, c.limit), (money(500, "USD"), money(2000, "USD")));
+    }
+
+    #[test]
+    fn credits_need_to_be_enabled_with_a_cap() {
+        let with = |extra: &str| {
+            let json = format!(r#"{{"five_hour": {{"utilization": 9}}, "extra_usage": {extra}}}"#);
+            Usage::from_json(&json).unwrap().credits
+        };
+        // The 2026-10-23 Pro response: turned off, every amount null.
+        assert_eq!(
+            with(r#"{"is_enabled": false, "monthly_limit": null}"#),
+            None
+        );
+        assert_eq!(
+            with(r#"{"is_enabled": true, "monthly_limit": null, "used_credits": 5}"#),
+            None
+        );
+        assert_eq!(
+            with(r#"{"is_enabled": true, "monthly_limit": 0, "used_credits": 0}"#),
+            None
+        );
+        // Overspent: 100%, nothing left, never negative.
+        let json = r#"{"five_hour": {"utilization": 9}, "extra_usage": {"is_enabled": true,
+            "monthly_limit": 1000, "used_credits": 1234, "currency": "USD"}}"#;
+        let row = status(json, NOW).rows.pop().unwrap();
+        assert_eq!(row.percent, 100);
+        let Detail::Credits { left, .. } = row.detail else {
+            panic!("{row:?}")
+        };
+        assert_eq!(left.to_string(), "$0.00");
+    }
+
+    #[test]
+    fn money_is_written_in_ascii() {
+        assert_eq!(money(1410, "AUD").to_string(), "$14.10");
+        assert_eq!(money(5, "USD").to_string(), "$0.05");
+        assert_eq!(money(123456, "EUR").to_string(), "EUR 1234.56");
+        assert_eq!(money(4000, "").to_string(), "40.00");
+        let yen = Money {
+            minor: 500,
+            decimals: 0,
+            currency: "JPY".to_owned(),
+        };
+        assert_eq!(yen.to_string(), "JPY 500");
+    }
+
     #[test]
     fn rejects_garbage_and_missing_limits() {
         assert!(matches!(
@@ -407,7 +646,7 @@ mod tests {
             NOW,
         );
         assert_eq!(s.rows.len(), 1);
-        assert_eq!(s.rows[0].reset, Reset::Unknown);
+        assert_eq!(s.rows[0].reset(), Some(Reset::Unknown));
     }
 
     #[test]
@@ -415,14 +654,14 @@ mod tests {
         let s = status(PRO, NOW);
         assert_eq!(s.rows[0].percent, 62);
         assert_eq!(
-            s.rows[0].reset,
-            Reset::At {
+            s.rows[0].reset(),
+            Some(Reset::At {
                 at: naive("2026-10-19 14:30"),
                 left: Span::from_minutes(2 * 60 + 14)
-            }
+            })
         );
-        let Reset::At { at, left } = s.rows[1].reset else {
-            panic!("weekly reset {:?}", s.rows[1].reset)
+        let Some(Reset::At { at, left }) = s.rows[1].reset() else {
+            panic!("weekly reset {:?}", s.rows[1].reset())
         };
         assert_eq!(at.format("%a %H:%M").to_string(), "Fri 09:00");
         assert_eq!(left.to_string(), "3d 20h");
@@ -443,10 +682,10 @@ mod tests {
             .unwrap();
         assert_eq!(s.rows[0].percent, 0);
         assert_eq!(
-            s.rows[0].reset,
-            Reset::Passed {
+            s.rows[0].reset(),
+            Some(Reset::Passed {
                 at: naive("2026-10-19 14:30")
-            }
+            })
         );
         assert_eq!(s.rows[1].percent, 23);
     }

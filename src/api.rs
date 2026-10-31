@@ -190,8 +190,10 @@ impl ApiSource {
     }
 }
 
-impl UsageSource for ApiSource {
-    fn fetch(&mut self, now: DateTime<Utc>) -> Result<Usage, SourceError> {
+impl ApiSource {
+    /// The usage API's JSON body, unparsed, after any token refresh. For
+    /// capturing new response shapes (`--check --raw`); it holds no tokens.
+    pub fn fetch_raw(&mut self, now: DateTime<Utc>) -> Result<String, SourceError> {
         if self.creds.is_none() || self.modified() != self.seen {
             self.load()?;
         }
@@ -207,12 +209,18 @@ impl UsageSource for ApiSource {
             (status, text) = self.get_usage()?;
         }
         match status {
-            200 => Ok(Usage::from_json(&text)?),
+            200 => Ok(text),
             401 | 403 => Err(SourceError::Auth(format!(
                 "usage api returned http {status}"
             ))),
             _ => Err(SourceError::Http(status)),
         }
+    }
+}
+
+impl UsageSource for ApiSource {
+    fn fetch(&mut self, now: DateTime<Utc>) -> Result<Usage, SourceError> {
+        Ok(Usage::from_json(&self.fetch_raw(now)?)?)
     }
 
     fn sign_in_expires(&self) -> Option<DateTime<Utc>> {

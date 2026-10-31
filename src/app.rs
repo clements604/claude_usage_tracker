@@ -162,6 +162,8 @@ pub struct App<S, P> {
     /// Address the open portal is serving; `Some` while signing in.
     portal_url: Option<String>,
     last_attempt: Option<DateTime<Utc>>,
+    /// Hostname for the dashboard footer.
+    host: Option<String>,
 }
 
 impl<S: UsageSource, P: Panel> App<S, P> {
@@ -180,7 +182,14 @@ impl<S: UsageSource, P: Panel> App<S, P> {
             portal: None,
             portal_url: None,
             last_attempt: None,
+            host: None,
         }
+    }
+
+    /// Show `host` (the device's hostname) in the dashboard footer.
+    pub fn with_host(mut self, host: impl Into<String>) -> Self {
+        self.host = Some(host.into());
+        self
     }
 
     /// Offer `portal` (the phone sign-in page) whenever the account needs
@@ -284,6 +293,7 @@ impl<S: UsageSource, P: Panel> App<S, P> {
         };
         let status = status.map(|mut s| {
             s.sign_in_left = sign_in_warning(self.source.sign_in_expires(), now);
+            s.host.clone_from(&self.host);
             s
         });
         // The portal is closed by the first good fetch, so while it is open
@@ -445,6 +455,7 @@ mod tests {
                 resets_at: Some(at("2026-10-22 23:00")),
             }),
             model: None,
+            credits: None,
         }
     }
 
@@ -619,6 +630,18 @@ mod tests {
             a.panel.frames[1],
             expected_frame(Screen::Dashboard(&warned))
         );
+    }
+
+    #[test]
+    fn shows_hostname_on_the_dashboard() {
+        let mut a = app(Ok(usage(62.0))).with_host("claude-ticker");
+        let c = clock("2026-10-19 02:16");
+        a.tick(&c).unwrap();
+        let named = Status {
+            host: Some("claude-ticker".to_owned()),
+            ..status(&usage(62.0), "2026-10-19 02:16", &c)
+        };
+        assert_eq!(a.panel.frames[0], expected_frame(Screen::Dashboard(&named)));
     }
 
     /// What the fake portal was asked to do, shared with the test.
