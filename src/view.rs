@@ -186,7 +186,7 @@ where
         Alignment::Left,
         t,
     )?;
-    let pct = format!("{}%", row.percent);
+    let pct = value_text(row);
     text(&pct, l.percent_font, TEXT_RIGHT, y, Alignment::Right, t)?;
     progress_bar(row.percent, y + l.bar_dy, t)?;
     text(
@@ -205,7 +205,7 @@ where
     D: DrawTarget<Color = BinaryColor>,
 {
     text(&row.label, &FONT_7X13_BOLD, MARGIN, y, Alignment::Left, t)?;
-    let pct = format!("{}%", row.percent);
+    let pct = value_text(row);
     text(&pct, &FONT_7X13_BOLD, TEXT_RIGHT, y, Alignment::Right, t)?;
     text(
         &short_detail(&row.detail),
@@ -218,11 +218,19 @@ where
     progress_bar(row.percent, y + DENSE_BAR_DY, t)
 }
 
-/// The line under a bar: when it resets, or `$14.10 left of $40.00`.
+/// Right of the label: `62%`, or for credits the amount left, `$11.15`.
+fn value_text(row: &Row) -> String {
+    match &row.detail {
+        Detail::Credits { left, .. } => left.to_string(),
+        Detail::Reset(_) => format!("{}%", row.percent),
+    }
+}
+
+/// The line under a bar: when it resets, or `of $40.00 monthly limit`.
 fn detail_line(detail: &Detail) -> String {
     match detail {
         Detail::Reset(reset) => reset_line(*reset),
-        Detail::Credits { left, limit } => format!("{left} left of {limit}"),
+        Detail::Credits { limit, .. } => format!("of {limit} monthly limit"),
     }
 }
 
@@ -236,7 +244,8 @@ fn short_detail(detail: &Detail) -> String {
         Detail::Reset(Reset::At { at, left }) => format!("{} ({left})", at.format("%a %H:%M")),
         Detail::Reset(Reset::Passed { at }) => format!("reset {}", at.format(TIME_FORMAT)),
         Detail::Reset(Reset::Unknown) => String::new(),
-        Detail::Credits { left, .. } => format!("{left} left"),
+        // The label and amount already say it all.
+        Detail::Credits { .. } => String::new(),
     }
 }
 
@@ -517,7 +526,7 @@ mod tests {
     /// Credits at their widest: a non-dollar currency and big amounts.
     fn credits_row() -> Row {
         Row {
-            label: "CREDITS".to_owned(),
+            label: "CREDITS LEFT".to_owned(),
             percent: 100,
             detail: Detail::Credits {
                 left: money(99_999_999, "EUR"),
@@ -604,7 +613,7 @@ mod tests {
         assert_eq!(short_detail(&rows[0].detail), "Wed 23:59 (6d 23h)");
         assert_eq!(short_detail(&rows[1].detail), "23:59 (23h 59m)");
         assert_eq!(short_detail(&rows[2].detail), "reset 23:59");
-        assert_eq!(short_detail(&rows[4].detail), "EUR 999999.99 left");
+        assert_eq!(short_detail(&rows[4].detail), "");
     }
 
     #[test]
@@ -613,8 +622,14 @@ mod tests {
             left: money(1410, "AUD"),
             limit: money(4000, "AUD"),
         };
-        assert_eq!(detail_line(&d), "$14.10 left of $40.00");
-        assert_eq!(short_detail(&d), "$14.10 left");
+        assert_eq!(detail_line(&d), "of $40.00 monthly limit");
+        assert_eq!(short_detail(&d), "");
+        let row = Row {
+            label: "CREDITS LEFT".to_owned(),
+            percent: 35,
+            detail: d,
+        };
+        assert_eq!(value_text(&row), "$14.10");
     }
 
     #[test]

@@ -6,7 +6,7 @@
   <img src="docs/screens/dashboard.png" alt="The claude-ticker dashboard: session 62%, resets 14:30; week 23%, resets Friday 09:00" width="500">
 </p>
 
-If you use Claude on a **Pro or Max** plan, you have a 5-hour session limit and a weekly limit. claude-ticker shows both on a 2.13" e-paper screen next to your desk. It shows how much of each you've used, when each one resets, a weekly limit for a specific model (such as Opus) if your plan has one, and how much of your monthly usage-credits budget you've spent if you've turned credits on. It updates every 5 minutes.
+If you use Claude on a **Pro or Max** plan, you have a 5-hour session limit and a weekly limit. claude-ticker shows both on a 2.13" e-paper screen next to your desk. It shows how much of each you've used, when each one resets, a weekly limit for a specific model (such as Opus) if your plan has one, and how much is left under your monthly usage-credits limit if you've turned credits on. It updates every 5 minutes.
 
 It runs on a Raspberry Pi Zero W or Zero 2 W with a Waveshare e-paper HAT, which is a screen that plugs straight onto the Pi's pins. The Pi and screen together cost roughly US$35–45. E-paper keeps its image with no power and doesn't glow, so the display stays readable all day without lighting up your desk.
 
@@ -36,7 +36,7 @@ It runs on a Raspberry Pi Zero W or Zero 2 W with a Waveshare e-paper HAT, which
 |---|---|
 | <img src="docs/screens/dashboard.png" alt="Dashboard" width="300"> | **Dashboard.** Your 5-hour **session** and **weekly** usage, each with a bar and the time it resets. The bottom line shows when the numbers were last fetched, and the Pi's hostname (handy for `ssh you@<hostname>.local`). |
 | <img src="docs/screens/dashboard-model.png" alt="Dashboard with a model row" width="300"> | **Dashboard with a model limit.** If your plan has a separate weekly limit for one model, such as Opus, it gets a third row. |
-| <img src="docs/screens/dashboard-credits.png" alt="Dashboard with usage credits" width="300"> | **Usage credits.** If you've turned on usage credits (extra usage you pay for once you hit your plan's limits), a **CREDITS** row shows how much of your monthly spending cap you've used, and how much is left. |
+| <img src="docs/screens/dashboard-credits.png" alt="Dashboard with usage credits" width="300"> | **Usage credits.** If you've turned on usage credits (extra usage you pay for once you hit your plan's limits), a **CREDITS LEFT** row shows how much is left under your monthly spending limit, with a bar for the share remaining. Note this is the limit you set, not your prepaid balance, which Claude's usage endpoint doesn't report, so it can differ from the balance on claude.ai. |
 | <img src="docs/screens/dashboard-four.png" alt="Dashboard with four rows" width="300"> | **Four rows.** With both a model limit and usage credits, the rows get closer together and each reset time moves up beside its label. |
 | <img src="docs/screens/stale.png" alt="Stale data" width="300"> | **STALE.** The Pi hasn't been able to fetch new numbers for a while (15 minutes by default), usually because of a Wi-Fi drop. It keeps showing the last numbers and marks when they're from. It clears by itself at the next successful fetch. |
 | <img src="docs/screens/expiry-warning.png" alt="Sign-in expiry warning" width="300"> | **re-login in ...** The Pi's sign-in expires in less than 5 days. [Sign in again](#signing-in-again) before then. This takes the hostname's place until you do. |

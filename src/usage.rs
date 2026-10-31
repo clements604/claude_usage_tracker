@@ -229,16 +229,18 @@ impl Usage {
     }
 }
 
-/// `CREDITS`: percent of the monthly cap spent, and what is left of it.
+/// `CREDITS LEFT`: what is left of the monthly cap. Unlike the other rows,
+/// `percent` is the share *remaining*, so the bar and the amount agree.
 fn credits_row(c: &Credits) -> Row {
+    let left = c.limit.minor.saturating_sub(c.used.minor).max(0);
     // Checked above zero when parsed; f64 is exact far beyond any real cap.
-    let percent = clamp_percent(c.used.minor as f64 * 100.0 / c.limit.minor.max(1) as f64);
+    let percent = clamp_percent(left as f64 * 100.0 / c.limit.minor.max(1) as f64);
     Row {
-        label: "CREDITS".to_owned(),
+        label: "CREDITS LEFT".to_owned(),
         percent,
         detail: Detail::Credits {
             left: Money {
-                minor: c.limit.minor.saturating_sub(c.used.minor).max(0),
+                minor: left,
                 ..c.limit.clone()
             },
             limit: c.limit.clone(),
@@ -349,9 +351,9 @@ pub fn sign_in_warning(expires: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Op
 /// One limit on the dashboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
-    /// `SESSION`, `WEEK`, `WEEK OPUS` or `CREDITS`.
+    /// `SESSION`, `WEEK`, `WEEK OPUS` or `CREDITS LEFT`.
     pub label: String,
-    /// Percent used, 0–100.
+    /// Percent used, 0–100 (for `CREDITS LEFT`, percent remaining).
     pub percent: u8,
     /// The line under the bar.
     pub detail: Detail,
@@ -559,7 +561,7 @@ mod tests {
         );
         let s = status(json, NOW);
         let row = s.rows.last().unwrap();
-        assert_eq!((row.label.as_str(), row.percent), ("CREDITS", 65));
+        assert_eq!((row.label.as_str(), row.percent), ("CREDITS LEFT", 35));
         assert_eq!(
             row.detail,
             Detail::Credits {
@@ -601,11 +603,11 @@ mod tests {
             with(r#"{"is_enabled": true, "monthly_limit": 0, "used_credits": 0}"#),
             None
         );
-        // Overspent: 100%, nothing left, never negative.
+        // Overspent: 0% left, nothing left, never negative.
         let json = r#"{"five_hour": {"utilization": 9}, "extra_usage": {"is_enabled": true,
             "monthly_limit": 1000, "used_credits": 1234, "currency": "USD"}}"#;
         let row = status(json, NOW).rows.pop().unwrap();
-        assert_eq!(row.percent, 100);
+        assert_eq!(row.percent, 0);
         let Detail::Credits { left, .. } = row.detail else {
             panic!("{row:?}")
         };
