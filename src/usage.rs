@@ -54,6 +54,10 @@ pub struct Credits {
     pub used: Money,
     /// The monthly cap.
     pub limit: Money,
+    /// Extra credit (for example a promotional credit) that the web page
+    /// counts but the API does not report, in the cap's minor units. Zero
+    /// unless set with [`Usage::with_credits_bonus`].
+    pub bonus: i64,
 }
 
 /// An amount of money in minor units (cents), as the API reports it.
@@ -116,6 +120,17 @@ pub enum ParseError {
 }
 
 impl Usage {
+    /// Count `cents` (hundredths of the credits' currency) of extra credit
+    /// that the API does not report, so the credits row matches the figure on
+    /// claude.ai. Does nothing without credits.
+    pub fn with_credits_bonus(mut self, cents: i64) -> Self {
+        if let Some(c) = &mut self.credits {
+            let scaled = i128::from(cents) * 10_i128.pow(c.limit.decimals) / 100;
+            c.bonus = i64::try_from(scaled).unwrap_or(0).max(0);
+        }
+        self
+    }
+
     /// Parse a response from the usage endpoint.
     pub fn from_json(text: &str) -> Result<Self, ParseError> {
         let v: Value =
@@ -229,12 +244,20 @@ impl Usage {
     }
 }
 
-/// `CREDITS LEFT`: what is left of the monthly cap. Unlike the other rows,
-/// `percent` is the share *remaining*, so the bar and the amount agree.
+/// `CREDITS LEFT`: what is left of the monthly cap, plus any bonus. Unlike
+/// the other rows, `percent` is the share *remaining*, so the bar and the
+/// amount agree.
 fn credits_row(c: &Credits) -> Row {
-    let left = c.limit.minor.saturating_sub(c.used.minor).max(0);
-    // Checked above zero when parsed; f64 is exact far beyond any real cap.
-    let percent = clamp_percent(left as f64 * 100.0 / c.limit.minor.max(1) as f64);
+    let left = c
+        .limit
+        .minor
+        .saturating_sub(c.used.minor)
+        .max(0)
+        .saturating_add(c.bonus);
+    let total = c.limit.minor.saturating_add(c.bonus);
+    // The cap is above zero (checked when parsed); f64 is exact far beyond
+    // any real amount.
+    let percent = clamp_percent(left as f64 * 100.0 / total.max(1) as f64);
     Row {
         label: "CREDITS LEFT".to_owned(),
         percent,
@@ -243,7 +266,11 @@ fn credits_row(c: &Credits) -> Row {
                 minor: left,
                 ..c.limit.clone()
             },
-            limit: c.limit.clone(),
+            limit: Money {
+                minor: total,
+                ..c.limit.clone()
+            },
+            bonus: c.bonus > 0,
         },
     }
 }
@@ -277,7 +304,11 @@ fn spend(s: &Value) -> Option<Credits> {
 
 /// Credits only make a row with a cap to measure against.
 fn credits(used: Money, limit: Money) -> Option<Credits> {
-    (limit.minor > 0).then_some(Credits { used, limit })
+    (limit.minor > 0).then_some(Credits {
+        used,
+        limit,
+        bonus: 0,
+    })
 }
 
 fn money(minor: &Value, currency: &str, decimals: u64) -> Option<Money> {
@@ -379,8 +410,10 @@ pub enum Detail {
     Credits {
         /// Cap minus spent, never negative.
         left: Money,
-        /// The monthly cap.
+        /// The monthly cap, plus any bonus.
         limit: Money,
+        /// `limit` and `left` include a bonus the API does not report.
+        bonus: bool,
     },
 }
 
@@ -557,6 +590,7 @@ mod tests {
             Some(Credits {
                 used: money(2590, "AUD"),
                 limit: money(4000, "AUD"),
+                bonus: 0,
             })
         );
         let s = status(json, NOW);
@@ -566,10 +600,58 @@ mod tests {
             row.detail,
             Detail::Credits {
                 left: money(1410, "AUD"),
-                limit: money(4000, "AUD")
+                limit: money(4000, "AUD"),
+                bonus: false,
             }
         );
         assert_eq!(row.reset(), None);
+    }
+
+    #[test]
+    fn credits_bonus_is_added_to_amount_and_cap() {
+        let json = r#"{"five_hour": {"utilization": 9}, "extra_usage": {"is_enabled": true,
+            "monthly_limit": 4000, "used_credits": 2885, "currency": "AUD", "decimal_places": 2}}"#;
+        let usage = Usage::from_json(json).unwrap().with_credits_bonus(1000);
+        assert_eq!(usage.credits.as_ref().unwrap().bonus, 1000);
+        let s = usage
+            .status(t(NOW), t(NOW), TimeDelta::minutes(15), brisbane)
+            .unwrap();
+        let row = s.rows.last().unwrap();
+        // A$11.15 under the cap, plus A$10.00: A$21.15 of A$50.00.
+        assert_eq!(row.percent, 42);
+        assert_eq!(
+            row.detail,
+            Detail::Credits {
+                left: money(2115, "AUD"),
+                limit: money(5000, "AUD"),
+                bonus: true,
+            }
+        );
+        // Without credits, or with none left under the cap, it still adds up.
+        let none = Usage::from_json(r#"{"five_hour": {"utilization": 9}}"#).unwrap();
+        assert_eq!(none.with_credits_bonus(1000).credits, None);
+        let over = json.replace("2885", "9999");
+        let row = status_of(&over, 1000);
+        assert_eq!(row.percent, 20);
+    }
+
+    #[test]
+    fn credits_bonus_scales_to_the_currency_decimals() {
+        let yen = r#"{"five_hour": {"utilization": 9}, "extra_usage": {"is_enabled": true,
+            "monthly_limit": 5000, "used_credits": 0, "currency": "JPY", "decimal_places": 0}}"#;
+        let c = Usage::from_json(yen).unwrap().with_credits_bonus(1000);
+        assert_eq!(c.credits.unwrap().bonus, 10);
+    }
+
+    fn status_of(json: &str, bonus_cents: i64) -> Row {
+        Usage::from_json(json)
+            .unwrap()
+            .with_credits_bonus(bonus_cents)
+            .status(t(NOW), t(NOW), TimeDelta::minutes(15), brisbane)
+            .unwrap()
+            .rows
+            .pop()
+            .unwrap()
     }
 
     #[test]

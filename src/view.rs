@@ -230,7 +230,14 @@ fn value_text(row: &Row) -> String {
 fn detail_line(detail: &Detail) -> String {
     match detail {
         Detail::Reset(reset) => reset_line(*reset),
-        Detail::Credits { limit, .. } => format!("of {limit} monthly limit"),
+        Detail::Credits { limit, bonus, .. } => {
+            let tail = if *bonus {
+                "incl. bonus"
+            } else {
+                "monthly limit"
+            };
+            format!("of {limit} {tail}")
+        }
     }
 }
 
@@ -531,6 +538,7 @@ mod tests {
             detail: Detail::Credits {
                 left: money(99_999_999, "EUR"),
                 limit: money(99_999_999, "EUR"),
+                bonus: true,
             },
         }
     }
@@ -621,8 +629,15 @@ mod tests {
         let d = Detail::Credits {
             left: money(1410, "AUD"),
             limit: money(4000, "AUD"),
+            bonus: false,
         };
         assert_eq!(detail_line(&d), "of $40.00 monthly limit");
+        let with_bonus = Detail::Credits {
+            left: money(2410, "AUD"),
+            limit: money(5000, "AUD"),
+            bonus: true,
+        };
+        assert_eq!(detail_line(&with_bonus), "of $50.00 incl. bonus");
         assert_eq!(short_detail(&d), "");
         let row = Row {
             label: "CREDITS LEFT".to_owned(),

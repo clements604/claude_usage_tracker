@@ -20,3 +20,5 @@ poll_seconds = 300           # how often to fetch usage; minimum 60
 stale_minutes = 15           # mark the numbers STALE after this long without an update
 full_refresh_every = 12      # partial refreshes between full refreshes (12 × 5 min ≈ hourly)
 flipped = false              # rotate 180° if mounted upside down
+credits_bonus = 0.00         # extra credit the API doesn't report (e.g. a promotional
+                             # credit shown on claude.ai) to add to CREDITS LEFT

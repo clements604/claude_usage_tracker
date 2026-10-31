@@ -76,6 +76,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let credits = Some(Credits {
         used: aud(2590),
         limit: aud(4000),
+        bonus: 0,
     });
     let max = Usage {
         model: Some(ModelQuota {

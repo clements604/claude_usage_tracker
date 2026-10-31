@@ -17,6 +17,7 @@
 //! stale_minutes = 15           # flag data older than this; ≥ poll     (default 15)
 //! full_refresh_every = 12      # partial refreshes between fulls       (default 12)
 //! flipped = false              # rotate 180° if the Pi is mounted upside down
+//! credits_bonus = 0.00         # extra credit (e.g. promotional) to add to CREDITS LEFT
 //! ```
 //!
 //! Every key is optional. The timezone decides how reset times are written
@@ -73,6 +74,10 @@ pub struct DisplaySettings {
     pub full_refresh_every: u32,
     /// Rotate the image 180° (panel mounted upside down).
     pub flipped: bool,
+    /// Extra credit the usage API does not report (such as a promotional
+    /// credit the claude.ai page counts), in hundredths of the credits'
+    /// currency, added to the credits row. Zero by default.
+    pub credits_bonus_cents: i64,
 }
 
 /// Why the config could not be loaded.
@@ -108,6 +113,9 @@ pub enum ConfigError {
     /// `sign_in_port` below 1024 needs root, which the service does not have.
     #[error("sign_in_port = {0} needs root; use 1024 or above (or 0 to turn the page off)")]
     PrivilegedPort(u16),
+    /// `credits_bonus` negative, not a number, or absurdly large.
+    #[error("credits_bonus = {0} is not valid; use an amount like 10.00 (or 0)")]
+    BadCreditsBonus(f64),
     /// `full_refresh_every` of zero.
     #[error("full_refresh_every must be at least 1")]
     FullRefreshZero,
@@ -146,6 +154,7 @@ struct RawDisplay {
     stale_minutes: u64,
     full_refresh_every: u32,
     flipped: bool,
+    credits_bonus: f64,
 }
 
 impl Default for RawDisplay {
@@ -155,6 +164,7 @@ impl Default for RawDisplay {
             stale_minutes: DEFAULT_STALE_MINUTES,
             full_refresh_every: 12,
             flipped: false,
+            credits_bonus: 0.0,
         }
     }
 }
@@ -209,6 +219,10 @@ impl Config {
             return Err(ConfigError::FullRefreshZero);
         }
 
+        if !(0.0..=1.0e6).contains(&d.credits_bonus) {
+            return Err(ConfigError::BadCreditsBonus(d.credits_bonus));
+        }
+
         Ok(Self {
             credentials: raw.account.credentials,
             sign_in_port: (port != 0).then_some(port),
@@ -217,6 +231,8 @@ impl Config {
                 stale_after: Duration::from_secs(d.stale_minutes.saturating_mul(60)),
                 full_refresh_every: d.full_refresh_every,
                 flipped: d.flipped,
+                // In range (checked above), so the cast cannot overflow.
+                credits_bonus_cents: (d.credits_bonus * 100.0).round() as i64,
             },
             timezone,
         })
@@ -237,7 +253,19 @@ mod tests {
         assert_eq!(c.display.stale_after, Duration::from_secs(15 * 60));
         assert_eq!(c.display.full_refresh_every, 12);
         assert!(!c.display.flipped);
+        assert_eq!(c.display.credits_bonus_cents, 0);
         assert_eq!(c.timezone, None);
+    }
+
+    #[test]
+    fn credits_bonus_is_validated() {
+        let c = Config::from_toml("[display]\ncredits_bonus = 10.1\n").unwrap();
+        assert_eq!(c.display.credits_bonus_cents, 1010);
+        for bad in ["-1", "1e9", "nan"] {
+            let err =
+                Config::from_toml(&format!("[display]\ncredits_bonus = {bad}\n")).unwrap_err();
+            assert!(matches!(err, ConfigError::BadCreditsBonus(_)), "{bad}");
+        }
     }
 
     #[test]

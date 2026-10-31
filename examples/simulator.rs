@@ -98,6 +98,7 @@ impl FakeSource {
         Credits {
             used: aud(2590),
             limit: aud(4000),
+            bonus: 0,
         }
     }
 

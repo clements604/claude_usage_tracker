@@ -137,7 +137,14 @@ fn print_status(config: &Config) -> Result<(), Box<dyn Error>> {
             }
             Detail::Reset(Reset::Passed { at }) => format!("reset at {}", at.format(TIME_FORMAT)),
             Detail::Reset(Reset::Unknown) => "no reset time".to_owned(),
-            Detail::Credits { left, limit } => format!("{left} left of {limit} monthly limit"),
+            Detail::Credits { left, limit, bonus } => {
+                let tail = if *bonus {
+                    "incl. bonus"
+                } else {
+                    "monthly limit"
+                };
+                format!("{left} left of {limit} {tail}")
+            }
         };
         println!("{:<12} {:>3}%  {detail}", row.label, row.percent);
     }

@@ -224,6 +224,7 @@ sudo systemctl restart claude-ticker
 | `stale_minutes` (under `[display]`) | `15` | Mark the numbers **STALE** if they haven't updated for this many minutes. |
 | `full_refresh_every` (under `[display]`) | `12` | How many quick updates between full screen refreshes, which clear faint ghosting. |
 | `flipped` (under `[display]`) | `false` | Set to `true` to turn the image upside down, if the Pi is mounted that way up. |
+| `credits_bonus` (under `[display]`) | `0.00` | Extra credit to add to the **CREDITS LEFT** row, such as a promotional credit. Claude's usage endpoint only reports your monthly spending limit, so if the balance on claude.ai is higher by a fixed amount, put that amount here (for example `10.00`) and the display will match. Remove it when the credit is used up or expires. |
 
 For example, to set your timezone and turn the image upside down:
 

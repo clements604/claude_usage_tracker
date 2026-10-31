@@ -118,6 +118,8 @@ pub struct AppSettings {
     pub stale_after: Duration,
     /// Partial refreshes between full refreshes.
     pub full_refresh_every: u32,
+    /// Extra credit to add to the credits row, in hundredths.
+    pub credits_bonus_cents: i64,
 }
 
 impl From<&DisplaySettings> for AppSettings {
@@ -126,6 +128,7 @@ impl From<&DisplaySettings> for AppSettings {
             poll_interval: d.poll_interval,
             stale_after: d.stale_after,
             full_refresh_every: d.full_refresh_every,
+            credits_bonus_cents: d.credits_bonus_cents,
         }
     }
 }
@@ -248,6 +251,7 @@ impl<S: UsageSource, P: Panel> App<S, P> {
         self.last_attempt = Some(now);
         match self.source.fetch(now) {
             Ok(usage) => {
+                let usage = usage.with_credits_bonus(self.settings.credits_bonus_cents);
                 self.last = Some(Fetched { usage, at: now });
                 self.error = None;
                 if self.portal_url.take().is_some()
@@ -472,6 +476,7 @@ mod tests {
                 poll_interval: POLL,
                 stale_after: Duration::from_secs(15 * 60),
                 full_refresh_every: 2,
+                credits_bonus_cents: 0,
             },
             RecordingPanel::default(),
         )

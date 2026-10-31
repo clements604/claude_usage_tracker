@@ -96,7 +96,7 @@ fn real_credits_response_adds_a_credits_row() {
         .map(|r| (r.label.as_str(), r.percent))
         .collect();
     assert_eq!(rows, [("SESSION", 9), ("WEEK", 100), ("CREDITS LEFT", 35)]);
-    let Detail::Credits { left, limit } = &s.rows[2].detail else {
+    let Detail::Credits { left, limit, .. } = &s.rows[2].detail else {
         panic!("{:?}", s.rows[2])
     };
     assert_eq!(

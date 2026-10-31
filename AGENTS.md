@@ -103,7 +103,7 @@ These live in `src/usage.rs`, and each has a unit test there. `tests/usage_api.r
 - Reset lines: `resets 14:30 (in 2h 14m)` when under a day away, otherwise `resets Fri 09:00 (in 3d 20h)`.
 - Sign-in warning: when the refresh token expires within `SIGN_IN_WARNING` (5 days), the footer shows `re-login in <span>` (`usage::sign_in_warning`, filled in by `app` from `UsageSource::sign_in_expires`). Unknown expiry means no warning.
 - Hostname: otherwise the footer's right side shows the device's hostname (`Status::host`, filled in by `app` from `App::with_host`; `main` reads `/proc/sys/kernel/hostname`). The sign-in warning takes its place when due. Non-ASCII and whitespace characters are dropped, and it is cut short to keep two characters clear of the left text (22 characters next to `STALE Mon 12:16`).
-- Credits: the row shows the amount left (cap − spent, never negative, e.g. `$14.10`) where other rows show a percentage, and its bar is the share *remaining* (`Row::percent` is percent remaining for this row only). The line under the bar is `of $40.00 monthly limit`. This is the spend limit, not the prepaid balance shown on the claude.ai usage page, which the API does not return (`spend.balance` is null, checked 2026-10-31). `$` is used for USD, AUD, CAD, NZD, SGD and HKD; other currencies are written as their code (`EUR 14.10`), since the fonts are ASCII-only. The API gives no date for the cap's reset, so none is shown.
+- Credits: the row shows the amount left (cap − spent, never negative, e.g. `$14.10`) where other rows show a percentage, and its bar is the share *remaining* (`Row::percent` is percent remaining for this row only). The line under the bar is `of $40.00 monthly limit`. This is the spend limit, not the prepaid balance shown on the claude.ai usage page, which the API does not return (`spend.balance` and `promo_credits` are null, checked 2026-10-31). The claude.ai figure counted a fixed A$10.00 more (promotional credit), so `[display] credits_bonus` adds an amount by hand: it is added to both the amount left and the cap (`Usage::with_credits_bonus`, applied in `app`), and the line becomes `of $50.00 incl. bonus`. It defaults to 0 because it is specific to one account. `$` is used for USD, AUD, CAD, NZD, SGD and HKD; other currencies are written as their code (`EUR 14.10`), since the fonts are ASCII-only. The API gives no date for the cap's reset, so none is shown.
 - Staleness: data older than `stale_minutes` is flagged `STALE`. Data older than `STALE_LIMIT_FACTOR` (6) × `stale_minutes` is `StatusError::Stale`, and the error screen replaces the numbers.
 
 ### Errors in the loop (`app`)
@@ -142,6 +142,7 @@ poll_seconds = 300          # how often to fetch; minimum 60
 stale_minutes = 15          # flag STALE after this; must cover at least one poll
 full_refresh_every = 12     # partial refreshes between full refreshes; minimum 1
 flipped = false             # rotate 180° if the Pi is mounted upside down
+credits_bonus = 0.00        # extra credit the API doesn't report, added to CREDITS LEFT; 0 to 1000000
 ```
 
 Every key is optional and defaults to the values shown.
