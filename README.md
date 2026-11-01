@@ -289,12 +289,14 @@ claude-ticker-notify clear
 
 ### 3. Tell Claude Code to use it
 
-Merge the `hooks` from [deploy/claude-hooks.example.json](deploy/claude-hooks.example.json) into `~/.claude/settings.json`. If you already have a `hooks` section, add these events to it. Hooks there apply to every project, in the terminal and in VS Code. They raise the icon when Claude asks for permission, and clear it when you send a prompt, a tool runs, or Claude finishes. They're set to run in the background, so a Pi that is switched off never slows Claude down.
+Merge the `hooks` from [deploy/claude-hooks.example.json](deploy/claude-hooks.example.json) into `~/.claude/settings.json`. If you already have a `hooks` section, add these events to it. Hooks there apply to every project, in the terminal and in VS Code. They raise the icon when Claude asks for permission or asks you a question (the `AskUserQuestion` tool), and clear it when you send a prompt, a tool runs, or Claude finishes. They're set to run in the background, so a Pi that is switched off never slows Claude down.
 
 If you'd also like the icon when Claude has finished and is waiting for your next message, add `idle_prompt` to the `Notification` matcher: `"permission_prompt|elicitation_dialog|idle_prompt"`.
 
 ### If the icon doesn't appear
 
+- Hooks run on the computer where Claude Code runs. If you use Claude Code on another machine (or over SSH or a dev container), set up steps 2 and 3 there too: the helper script, `notify.env`, and the hooks in that machine's `~/.claude/settings.json`. That machine must also be able to reach the Pi's address.
+- A hook only takes effect in sessions started after you edit `settings.json`.
 - Run `claude-ticker-notify attention` on its own. If nothing happens, check the URL and token in `~/.config/claude-ticker/notify.env`.
 - See what the Pi says: `curl -i -X POST -H "Authorization: Bearer YOUR_TOKEN" http://claude-ticker.local:8090/attention`. `401` means the token is wrong; no answer means the port is wrong or the service isn't running (`journalctl -u claude-ticker -n 20`).
 - If `claude-ticker.local` doesn't resolve on your computer, use the Pi's IP address instead.
