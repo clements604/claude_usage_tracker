@@ -9,7 +9,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "AskUserQuestion",
+        "matcher": "AskUserQuestion|ExitPlanMode",
         "hooks": [
           { "type": "command", "async": true, "command": "~/.local/bin/claude-ticker-notify attention" }
         ]

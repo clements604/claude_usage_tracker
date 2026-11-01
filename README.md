@@ -289,7 +289,7 @@ claude-ticker-notify clear
 
 ### 3. Tell Claude Code to use it
 
-Merge the `hooks` from [deploy/claude-hooks.example.json](deploy/claude-hooks.example.json) into `~/.claude/settings.json`. If you already have a `hooks` section, add these events to it. Hooks there apply to every project, in the terminal and in VS Code. They raise the icon when Claude asks for permission or asks you a question (the `AskUserQuestion` tool), and clear it when you send a prompt, a tool runs, or Claude finishes. They're set to run in the background, so a Pi that is switched off never slows Claude down.
+Merge the `hooks` from [deploy/claude-hooks.example.json](deploy/claude-hooks.example.json) into `~/.claude/settings.json`. If you already have a `hooks` section, add these events to it. Hooks there apply to every project, in the terminal and in VS Code. They raise the icon when Claude asks for permission or asks you a question or for approval of a plan (the `AskUserQuestion` and `ExitPlanMode` tools), and clear it when you send a prompt, a tool runs, or Claude finishes. They're set to run in the background, so a Pi that is switched off never slows Claude down.
 
 If you'd also like the icon when Claude has finished and is waiting for your next message, add `idle_prompt` to the `Notification` matcher: `"permission_prompt|elicitation_dialog|idle_prompt"`.
 
