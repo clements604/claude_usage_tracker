@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          { "type": "command", "async": true, "command": "~/.local/bin/claude-ticker-notify attention" }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|elicitation_dialog",
+        "hooks": [
+          { "type": "command", "async": true, "command": "~/.local/bin/claude-ticker-notify attention" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "async": true, "command": "~/.local/bin/claude-ticker-notify clear" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "async": true, "command": "~/.local/bin/claude-ticker-notify clear" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "async": true, "command": "~/.local/bin/claude-ticker-notify clear" }
+        ]
+      }
+    ]
+  }
+}

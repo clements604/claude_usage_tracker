@@ -87,6 +87,15 @@ pub trait Portal: std::fmt::Debug {
     fn close(&mut self);
 }
 
+/// Something that can say the person is needed back at the computer, such as
+/// Claude Code waiting for an approval. The panel shows an icon while it is
+/// raised.
+pub trait Attention: std::fmt::Debug {
+    /// Whether attention is wanted right now. A request that has timed out
+    /// counts as cleared.
+    fn raised(&mut self) -> bool;
+}
+
 /// Why the sign-in page could not be started.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("cannot start the sign-in page: {0}")]

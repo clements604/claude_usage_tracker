@@ -29,7 +29,7 @@ use chrono_tz::Tz;
 use crate::config::DisplaySettings;
 use crate::framebuffer::Framebuffer;
 use crate::panel::{Panel, RefreshPolicy};
-use crate::source::{Portal, SourceError, UsageSource};
+use crate::source::{Attention, Portal, SourceError, UsageSource};
 use crate::usage::{Usage, sign_in_warning};
 use crate::view::{self, Screen};
 
@@ -50,6 +50,11 @@ pub const ERROR_RETRY: Duration = Duration::from_secs(60);
 /// How often to check for a finished sign-in while the sign-in screen is up.
 /// Cheap: it only asks the portal; usage is fetched once one completes.
 pub const SIGN_IN_POLL: Duration = Duration::from_secs(3);
+
+/// How often [`App::run`] checks for a change in whether the person is
+/// needed back at the computer while it waits for the next fetch. Cheap: it
+/// only asks the source, and redraws only on a change.
+pub const ATTENTION_POLL: Duration = Duration::from_secs(1);
 
 /// Source of the current time.
 pub trait Clock {
@@ -167,6 +172,9 @@ pub struct App<S, P> {
     last_attempt: Option<DateTime<Utc>>,
     /// Hostname for the dashboard footer.
     host: Option<String>,
+    attention: Option<Box<dyn Attention>>,
+    /// What the last frame showed for [`Attention`].
+    attention_on: bool,
 }
 
 impl<S: UsageSource, P: Panel> App<S, P> {
@@ -186,7 +194,15 @@ impl<S: UsageSource, P: Panel> App<S, P> {
             portal_url: None,
             last_attempt: None,
             host: None,
+            attention: None,
+            attention_on: false,
         }
+    }
+
+    /// Show an icon in the dashboard footer whenever `attention` is raised.
+    pub fn with_attention(mut self, attention: Box<dyn Attention>) -> Self {
+        self.attention = Some(attention);
+        self
     }
 
     /// Show `host` (the device's hostname) in the dashboard footer.
@@ -295,9 +311,11 @@ impl<S: UsageSource, P: Panel> App<S, P> {
             (Some(e), None) => Err(e.to_string()),
             (None, None) => Err("no usage fetched yet".to_owned()),
         };
+        self.attention_on = self.attention.as_mut().is_some_and(|a| a.raised());
         let status = status.map(|mut s| {
             s.sign_in_left = sign_in_warning(self.source.sign_in_expires(), now);
             s.host.clone_from(&self.host);
+            s.attention = self.attention_on;
             s
         });
         // The portal is closed by the first good fetch, so while it is open
@@ -334,8 +352,37 @@ impl<S: UsageSource, P: Panel> App<S, P> {
     pub fn run(&mut self, clock: &impl Clock) -> Result<(), AppError> {
         loop {
             let wait = self.tick(clock)?;
-            std::thread::sleep(wait);
+            self.sleep_watching(clock, wait)?;
         }
+    }
+
+    /// Sleep for `wait`, in short slices when there is an attention source
+    /// so a request shows up within [`ATTENTION_POLL`], not at the next fetch.
+    fn sleep_watching(&mut self, clock: &impl Clock, wait: Duration) -> Result<(), AppError> {
+        if self.attention.is_none() {
+            std::thread::sleep(wait);
+            return Ok(());
+        }
+        let mut left = wait;
+        while !left.is_zero() {
+            let slice = left.min(ATTENTION_POLL);
+            std::thread::sleep(slice);
+            left -= slice;
+            self.poll_attention(clock)?;
+        }
+        Ok(())
+    }
+
+    /// Redraw if [`Attention`] changed since the last frame. Does nothing
+    /// without a source, or while the waiting-for-time screen is up.
+    pub fn poll_attention(&mut self, clock: &impl Clock) -> Result<(), AppError> {
+        let Some(raised) = self.attention.as_mut().map(|a| a.raised()) else {
+            return Ok(());
+        };
+        if raised != self.attention_on && !self.showing_wait {
+            self.redraw(clock)?;
+        }
+        Ok(())
     }
 
     /// Make the next frame a full refresh and send it even if unchanged.
@@ -635,6 +682,70 @@ mod tests {
             a.panel.frames[1],
             expected_frame(Screen::Dashboard(&warned))
         );
+    }
+
+    /// Attention that the test raises and lowers by hand.
+    #[derive(Debug, Clone, Default)]
+    struct FakeAttention(std::rc::Rc<std::cell::Cell<bool>>);
+
+    impl Attention for FakeAttention {
+        fn raised(&mut self) -> bool {
+            self.0.get()
+        }
+    }
+
+    #[test]
+    fn attention_icon_follows_the_source_without_fetching() {
+        use Event::*;
+        let flag = FakeAttention::default();
+        let mut a = app(Ok(usage(62.0))).with_attention(Box::new(flag.clone()));
+        let c = clock("2026-10-19 02:16");
+        let calm = status(&usage(62.0), "2026-10-19 02:16", &c);
+        a.tick(&c).unwrap();
+        assert_eq!(a.panel.frames[0], expected_frame(Screen::Dashboard(&calm)));
+
+        // Nothing changed: polling draws nothing and fetches nothing.
+        a.poll_attention(&c).unwrap();
+        assert_eq!(a.panel.events, [Present(Refresh::Full)]);
+
+        flag.0.set(true);
+        a.poll_attention(&c).unwrap();
+        let raised = Status {
+            attention: true,
+            ..calm.clone()
+        };
+        assert_eq!(
+            a.panel.frames[1],
+            expected_frame(Screen::Dashboard(&raised))
+        );
+        assert_ne!(a.panel.frames[1], a.panel.frames[0]);
+        assert_eq!(a.source.fetches, 1);
+
+        // Still raised: no redraw. Lowered: back to the calm frame.
+        a.poll_attention(&c).unwrap();
+        assert_eq!(a.panel.frames.len(), 2);
+        flag.0.set(false);
+        a.poll_attention(&c).unwrap();
+        assert_eq!(a.panel.frames[2], a.panel.frames[0]);
+        assert_eq!(
+            a.panel.events,
+            [
+                Present(Refresh::Full),
+                Present(Refresh::Partial),
+                Present(Refresh::Partial)
+            ]
+        );
+    }
+
+    #[test]
+    fn attention_is_ignored_while_waiting_for_the_clock() {
+        let flag = FakeAttention::default();
+        let mut a = app(Ok(usage(62.0))).with_attention(Box::new(flag.clone()));
+        a.tick(&UnsyncedClock).unwrap();
+        let before = a.panel.events.clone();
+        flag.0.set(true);
+        a.poll_attention(&clock("2026-10-19 02:16")).unwrap();
+        assert_eq!(a.panel.events, before);
     }
 
     #[test]

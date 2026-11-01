@@ -25,6 +25,7 @@ It runs on a Raspberry Pi Zero W or Zero 2 W with a Waveshare e-paper HAT, which
   - [5. Install it on the Pi](#5-install-it-on-the-pi)
   - [6. Sign in to Claude](#6-sign-in-to-claude)
 - [Settings](#settings)
+- [Get notified when Claude needs you](#get-notified-when-claude-needs-you)
 - [Everyday use](#everyday-use)
 - [Troubleshooting](#troubleshooting)
 - [Privacy and security](#privacy-and-security)
@@ -38,6 +39,7 @@ It runs on a Raspberry Pi Zero W or Zero 2 W with a Waveshare e-paper HAT, which
 | <img src="docs/screens/dashboard-model.png" alt="Dashboard with a model row" width="300"> | **Dashboard with a model limit.** If your plan has a separate weekly limit for one model, such as Opus, it gets a third row. |
 | <img src="docs/screens/dashboard-credits.png" alt="Dashboard with usage credits" width="300"> | **Usage credits.** If you've turned on usage credits (extra usage you pay for once you hit your plan's limits), a **CREDITS LEFT** row shows how much is left under your monthly spending limit, with a bar for the share remaining. Note this is the limit you set, not your prepaid balance, which Claude's usage endpoint doesn't report, so it can differ from the balance on claude.ai. |
 | <img src="docs/screens/dashboard-four.png" alt="Dashboard with four rows" width="300"> | **Four rows.** With both a model limit and usage credits, the rows get closer together and each reset time moves up beside its label. |
+| <img src="docs/screens/dashboard-attention.png" alt="Dashboard with the needs-you icon" width="300"> | **Needs you.** A small circled **i** in the bottom right, in place of the hostname, means Claude Code is waiting for you, for example to approve something. Optional; see [Get notified when Claude needs you](#get-notified-when-claude-needs-you). |
 | <img src="docs/screens/stale.png" alt="Stale data" width="300"> | **STALE.** The Pi hasn't been able to fetch new numbers for a while (15 minutes by default), usually because of a Wi-Fi drop. It keeps showing the last numbers and marks when they're from. It clears by itself at the next successful fetch. |
 | <img src="docs/screens/expiry-warning.png" alt="Sign-in expiry warning" width="300"> | **re-login in ...** The Pi's sign-in expires in less than 5 days. [Sign in again](#signing-in-again) before then. This takes the hostname's place until you do. |
 | <img src="docs/screens/sign-in.png" alt="Sign-in QR code" width="300"> | **SIGN IN.** The Pi isn't signed in to Claude. Scan the QR code with your phone to sign in. See [step 6](#6-sign-in-to-claude). |
@@ -224,6 +226,7 @@ sudo systemctl restart claude-ticker
 | `stale_minutes` (under `[display]`) | `15` | Mark the numbers **STALE** if they haven't updated for this many minutes. |
 | `full_refresh_every` (under `[display]`) | `12` | How many quick updates between full screen refreshes, which clear faint ghosting. |
 | `flipped` (under `[display]`) | `false` | Set to `true` to turn the image upside down, if the Pi is mounted that way up. |
+| `port`, `token`, `timeout_minutes` (under `[notify]`) | off | The optional ["needs you" icon](#get-notified-when-claude-needs-you). Set a `port` (1024 or above) and a secret `token` of at least 16 characters to turn it on. The icon clears itself after `timeout_minutes` (default 30). |
 | `credits_bonus` (under `[display]`) | `0.00` | Extra credit to add to the **CREDITS LEFT** row, such as a promotional credit. Claude's usage endpoint only reports your monthly spending limit, so if the balance on claude.ai is higher by a fixed amount, put that amount here (for example `10.00`) and the display will match. Remove it when the credit is used up or expires. |
 
 For example, to set your timezone and turn the image upside down:
@@ -234,6 +237,68 @@ timezone = "Europe/London"
 [display]
 flipped = true
 ```
+
+## Get notified when Claude needs you
+
+Optional. When Claude Code stops to ask for approval, the display shows a small **i** icon in the bottom right, so you can leave your desk with the Pi and know when to come back. It works with Claude Code in the terminal and in the VS Code extension. The icon clears when you reply or Claude carries on, and also clears itself after 30 minutes.
+
+**How it works:** Claude Code runs a small command (a *hook*) on your computer when it needs you, and that command sends a message to the Pi over your home network. Your computer and the Pi must be on the same network.
+
+### 1. Turn it on, on the Pi
+
+Make a secret token and put it in the settings file:
+
+```sh
+head -c 24 /dev/urandom | base64          # prints a random token; copy it
+sudo nano /etc/claude-ticker/config.toml
+```
+
+Add this at the end of the file, with your own token:
+
+```toml
+[notify]
+port = 8090
+token = "paste-your-token-here"
+```
+
+Then `sudo systemctl restart claude-ticker`. Without a token and a port, the listener stays off.
+
+> [!NOTE]
+> The settings file can be read by anyone with a login on the Pi, and the token travels unencrypted on your local network. That's fine for a home network. Don't expose the port to the internet.
+
+### 2. Set up your computer
+
+Copy the helper script and tell it where the Pi is:
+
+```sh
+mkdir -p ~/.local/bin ~/.config/claude-ticker
+cp deploy/claude-ticker-notify.sh ~/.local/bin/claude-ticker-notify
+cat > ~/.config/claude-ticker/notify.env <<'EOF'
+CLAUDE_TICKER_URL=http://claude-ticker.local:8090
+CLAUDE_TICKER_TOKEN=paste-your-token-here
+EOF
+chmod 600 ~/.config/claude-ticker/notify.env
+```
+
+Use your Pi's hostname in the URL, and the port and token you chose. Test it:
+
+```sh
+claude-ticker-notify attention      # the icon appears within a second or two
+claude-ticker-notify clear
+```
+
+### 3. Tell Claude Code to use it
+
+Merge the `hooks` from [deploy/claude-hooks.example.json](deploy/claude-hooks.example.json) into `~/.claude/settings.json`. If you already have a `hooks` section, add these events to it. Hooks there apply to every project, in the terminal and in VS Code. They raise the icon when Claude asks for permission, and clear it when you send a prompt, a tool runs, or Claude finishes. They're set to run in the background, so a Pi that is switched off never slows Claude down.
+
+If you'd also like the icon when Claude has finished and is waiting for your next message, add `idle_prompt` to the `Notification` matcher: `"permission_prompt|elicitation_dialog|idle_prompt"`.
+
+### If the icon doesn't appear
+
+- Run `claude-ticker-notify attention` on its own. If nothing happens, check the URL and token in `~/.config/claude-ticker/notify.env`.
+- See what the Pi says: `curl -i -X POST -H "Authorization: Bearer YOUR_TOKEN" http://claude-ticker.local:8090/attention`. `401` means the token is wrong; no answer means the port is wrong or the service isn't running (`journalctl -u claude-ticker -n 20`).
+- If `claude-ticker.local` doesn't resolve on your computer, use the Pi's IP address instead.
+- Check that you restarted the service after editing the settings.
 
 ## Everyday use
 
@@ -453,6 +518,7 @@ cargo run --example simulator --features simulator -- --poll-seconds 5
 | ] / [ | Week usage +5% / −5% |
 | → / ← | Move time forward / back one hour |
 | O | Show or hide the Opus row |
+| I | Show or hide the "needs you" icon |
 | C | Show or hide a usage credits row |
 | X | Simulate network failures |
 | A | Sign out (shows the QR screen); press again to finish a simulated sign-in |

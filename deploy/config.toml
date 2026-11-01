@@ -22,3 +22,12 @@ full_refresh_every = 12      # partial refreshes between full refreshes (12 × 5
 flipped = false              # rotate 180° if mounted upside down
 credits_bonus = 0.00         # extra credit the API doesn't report (e.g. a promotional
                              # credit shown on claude.ai) to add to CREDITS LEFT
+
+[notify]
+# A "needs you" icon on the display while Claude Code waits for you (see the
+# README). 0 turns it off. To turn it on, set a port of 1024 or above and a
+# secret token, which the hook on your computer must send. Make one with:
+#   head -c 24 /dev/urandom | base64
+port = 0
+token = ""
+timeout_minutes = 30         # the icon clears itself after this long

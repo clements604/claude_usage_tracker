@@ -60,6 +60,7 @@ fn run(config: Config) -> Result<(), Box<dyn Error>> {
     use claude_ticker::api::ApiSource;
     use claude_ticker::app::{App, AppSettings, Clock, SystemClock, TIMESYNC_FLAG};
     use claude_ticker::epd::EpdPanel;
+    use claude_ticker::notify::NotifyListener;
     use claude_ticker::web::WebPortal;
 
     // The Pi may have just rebooted with a stale clock: wait for NTP.
@@ -76,6 +77,15 @@ fn run(config: Config) -> Result<(), Box<dyn Error>> {
         let page_clock = clock.clone();
         let portal = WebPortal::new(&config.credentials, port, move || page_clock.now());
         app = app.with_portal(Box::new(portal));
+    }
+    if let Some(n) = &config.notify {
+        // Only trusted time is used for the icon's timeout, like the portal.
+        let page_clock = clock.clone();
+        match NotifyListener::start(n.port, &n.token, n.timeout, move || page_clock.now()) {
+            Ok(listener) => app = app.with_attention(Box::new(listener)),
+            // The usage display matters more than the icon.
+            Err(e) => eprintln!("claude-ticker: notifications are off: port {}: {e}", n.port),
+        }
     }
     app.run(&clock)?;
     Ok(())

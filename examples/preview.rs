@@ -12,9 +12,10 @@
 //! Writes `dashboard.png` (session and week, the Pro case),
 //! `dashboard-model.png` (plus a model-specific weekly row),
 //! `dashboard-four.png` (model row and credits: the dense four-row layout),
+//! `dashboard-attention.png` (the "needs you" icon in the footer),
 //! `stale.png`, `expiry-warning.png` (stale, with the sign-in expiry
 //! warning), `sign-in.png` (signed out: the QR code for the phone sign-in
-//! page), `waiting.png`, `error.png`, and `mockup.png`: those eight tiled
+//! page), `waiting.png`, `error.png`, and `mockup.png`: those nine tiled
 //! two-up with 12 px gutters, which at `62 23 4` is `docs/ui-mockup.png`.
 //! Also `dashboard-credits.png` (session, week and credits), not tiled.
 
@@ -129,6 +130,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         Screen::Dashboard(&named(four.status(now, now, fresh, local)?)),
         "dashboard-four.png",
     )?;
+    let mut needed = named(pro.status(now, now, fresh, local)?);
+    needed.attention = true;
+    render(Screen::Dashboard(&needed), "dashboard-attention.png")?;
     let later = now + TimeDelta::minutes(40);
     render(
         Screen::Dashboard(&named(pro.status(now, later, fresh, local)?)),

@@ -8,7 +8,7 @@
 //! ```
 //!
 //! Keys: ↓/↑ session −/+5 %, [/] week −/+5 %, ←/→ time −/+1 h, O toggle the
-//! Opus weekly row, C toggle usage credits (A$25.90 of A$40.00), X toggle network failures, A toggle "signed out" (shows
+//! Opus weekly row, I toggle the "needs you" icon, C toggle usage credits (A$25.90 of A$40.00), X toggle network failures, A toggle "signed out" (shows
 //! the sign-in QR code; press A again to play the phone finishing), L toggle
 //! "sign-in expires in 2 days", Space
 //! fetch now, W toggle "clock not synced yet", F force full refresh, Esc quit.
@@ -26,7 +26,7 @@ use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
 use claude_ticker::app::{App, AppSettings, Clock, SystemClock};
 use claude_ticker::config::{Config, DisplaySettings};
 use claude_ticker::simulator::SimPanel;
-use claude_ticker::source::{Portal, PortalError, SourceError, UsageSource};
+use claude_ticker::source::{Attention, Portal, PortalError, SourceError, UsageSource};
 use claude_ticker::usage::{Credits, ModelQuota, Money, Quota, Usage};
 use claude_ticker::view::TIME_FORMAT;
 use embedded_graphics_simulator::SimulatorEvent;
@@ -147,6 +147,16 @@ impl UsageSource for FakeSource {
     }
 }
 
+/// Stands in for the "needs you" listener: raised while the flag is set.
+#[derive(Debug, Default)]
+struct FakeAttention(std::rc::Rc<std::cell::Cell<bool>>);
+
+impl Attention for FakeAttention {
+    fn raised(&mut self) -> bool {
+        self.0.get()
+    }
+}
+
 /// Stands in for the phone sign-in page: hands out a fixed address and
 /// "completes" when the simulator says so. Nothing is served.
 #[derive(Debug, Default)]
@@ -232,8 +242,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let source = FakeSource::new(clock.now());
     let signed_in = std::rc::Rc::default();
     let portal = FakePortal(std::rc::Rc::clone(&signed_in));
+    let attention = FakeAttention::default();
+    let needed = std::rc::Rc::clone(&attention.0);
     let mut app = App::new(source, AppSettings::from(&display), panel)
         .with_portal(Box::new(portal))
+        .with_attention(Box::new(attention))
         .with_host("claude-ticker");
 
     println!("claude-ticker simulator (fake usage, no network)");
@@ -241,7 +254,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("clock syncs in {}s (fake NTP)", opts.sync_seconds);
     }
     println!(
-        "keys: ↓/↑ session  [/] week  ←/→ ±1h  O opus row  C credits  X net fail  A signed out  L sign-in expiry  Space fetch  W sync  F full  Esc quit"
+        "keys: ↓/↑ session  [/] week  ←/→ ±1h  O opus row  I needs-you icon  C credits  X net fail  A signed out  L sign-in expiry  Space fetch  W sync  F full  Esc quit"
     );
 
     let mut next_fetch = Instant::now();
@@ -308,6 +321,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         Some(_) => None,
                         None => Some(src.opus_default()),
                     };
+                }
+                Keycode::I => {
+                    needed.set(!needed.get());
+                    redraw = true;
+                    continue;
                 }
                 Keycode::C => {
                     src.credits = match src.credits {

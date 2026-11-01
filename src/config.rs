@@ -18,6 +18,11 @@
 //! full_refresh_every = 12      # partial refreshes between fulls       (default 12)
 //! flipped = false              # rotate 180° if the Pi is mounted upside down
 //! credits_bonus = 0.00         # extra credit (e.g. promotional) to add to CREDITS LEFT
+//!
+//! [notify]
+//! port = 0                     # "needs you" listener for Claude Code hooks; 0 = off
+//! token = ""                   # shared secret, at least 16 characters; required with a port
+//! timeout_minutes = 30         # the icon clears itself after this long
 //! ```
 //!
 //! Every key is optional. The timezone decides how reset times are written
@@ -59,8 +64,37 @@ pub struct Config {
     pub sign_in_port: Option<u16>,
     /// How it is shown.
     pub display: DisplaySettings,
+    /// The "needs you" listener; `None` when `[notify] port` is 0.
+    pub notify: Option<NotifySettings>,
     /// Where reset times are shown for; `None` means the OS timezone.
     pub timezone: Option<Tz>,
+}
+
+/// Shortest accepted notification token.
+pub const MIN_NOTIFY_TOKEN: usize = 16;
+
+/// Default time before a "needs you" icon clears itself.
+pub const DEFAULT_NOTIFY_TIMEOUT_MINUTES: u64 = 30;
+
+/// The "needs you" listener, when it is turned on.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NotifySettings {
+    /// Port to listen on; 1024 or above.
+    pub port: u16,
+    /// Shared secret every request must carry.
+    pub token: String,
+    /// How long a raised icon stays up without a clear.
+    pub timeout: Duration,
+}
+
+impl std::fmt::Debug for NotifySettings {
+    // Without the token, which must never be logged.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotifySettings")
+            .field("port", &self.port)
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Validated display settings.
@@ -113,6 +147,17 @@ pub enum ConfigError {
     /// `sign_in_port` below 1024 needs root, which the service does not have.
     #[error("sign_in_port = {0} needs root; use 1024 or above (or 0 to turn the page off)")]
     PrivilegedPort(u16),
+    /// `[notify] port` below 1024 needs root, which the service does not have.
+    #[error("[notify] port = {0} needs root; use 1024 or above (or 0 to turn it off)")]
+    NotifyPrivilegedPort(u16),
+    /// `[notify] port` set without a usable token.
+    #[error(
+        "[notify] needs a token of at least {MIN_NOTIFY_TOKEN} characters when port is set; make one with: head -c 24 /dev/urandom | base64"
+    )]
+    NotifyToken,
+    /// `[notify] timeout_minutes` of zero.
+    #[error("[notify] timeout_minutes must be at least 1")]
+    NotifyTimeoutZero,
     /// `credits_bonus` negative, not a number, or absurdly large.
     #[error("credits_bonus = {0} is not valid; use an amount like 10.00 (or 0)")]
     BadCreditsBonus(f64),
@@ -129,6 +174,26 @@ struct RawConfig {
     account: RawAccount,
     #[serde(default)]
     display: RawDisplay,
+    #[serde(default)]
+    notify: RawNotify,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct RawNotify {
+    port: u16,
+    token: String,
+    timeout_minutes: u64,
+}
+
+impl Default for RawNotify {
+    fn default() -> Self {
+        Self {
+            port: 0,
+            token: String::new(),
+            timeout_minutes: DEFAULT_NOTIFY_TIMEOUT_MINUTES,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -223,6 +288,26 @@ impl Config {
             return Err(ConfigError::BadCreditsBonus(d.credits_bonus));
         }
 
+        let n = raw.notify;
+        let notify = if n.port == 0 {
+            None
+        } else {
+            if n.port < 1024 {
+                return Err(ConfigError::NotifyPrivilegedPort(n.port));
+            }
+            if n.token.chars().count() < MIN_NOTIFY_TOKEN || n.token.contains(char::is_whitespace) {
+                return Err(ConfigError::NotifyToken);
+            }
+            if n.timeout_minutes == 0 {
+                return Err(ConfigError::NotifyTimeoutZero);
+            }
+            Some(NotifySettings {
+                port: n.port,
+                token: n.token,
+                timeout: Duration::from_secs(n.timeout_minutes.saturating_mul(60)),
+            })
+        };
+
         Ok(Self {
             credentials: raw.account.credentials,
             sign_in_port: (port != 0).then_some(port),
@@ -234,6 +319,7 @@ impl Config {
                 // In range (checked above), so the cast cannot overflow.
                 credits_bonus_cents: (d.credits_bonus * 100.0).round() as i64,
             },
+            notify,
             timezone,
         })
     }
@@ -255,6 +341,51 @@ mod tests {
         assert!(!c.display.flipped);
         assert_eq!(c.display.credits_bonus_cents, 0);
         assert_eq!(c.timezone, None);
+    }
+
+    #[test]
+    fn notify_is_off_by_default_and_validated() {
+        assert_eq!(Config::from_toml("").unwrap().notify, None);
+        let on = |body: &str| Config::from_toml(&format!("[notify]\n{body}\n"));
+        let token = "token = \"0123456789abcdef\"";
+
+        let n = on(&format!("port = 8090\n{token}\ntimeout_minutes = 5"))
+            .unwrap()
+            .notify
+            .unwrap();
+        assert_eq!((n.port, n.timeout), (8090, Duration::from_secs(300)));
+        let defaulted = on(&format!("port = 8090\n{token}"))
+            .unwrap()
+            .notify
+            .unwrap();
+        assert_eq!(defaulted.timeout, Duration::from_secs(30 * 60));
+
+        // A token without a port is simply unused.
+        assert_eq!(on(token).unwrap().notify, None);
+        assert!(matches!(
+            on(&format!("port = 80\n{token}")),
+            Err(ConfigError::NotifyPrivilegedPort(80))
+        ));
+        for bad in ["", "token = \"short\"", "token = \"0123456789abcdef 0123\""] {
+            assert!(
+                matches!(
+                    on(&format!("port = 8090\n{bad}")),
+                    Err(ConfigError::NotifyToken)
+                ),
+                "{bad}"
+            );
+        }
+        assert!(matches!(
+            on(&format!("port = 8090\n{token}\ntimeout_minutes = 0")),
+            Err(ConfigError::NotifyTimeoutZero)
+        ));
+        assert!(Config::from_toml("[notify]\nprot = 1\n").is_err());
+    }
+
+    #[test]
+    fn notify_token_never_appears_in_debug_output() {
+        let c = Config::from_toml("[notify]\nport = 8090\ntoken = \"0123456789abcdef\"\n").unwrap();
+        assert!(!format!("{c:?}").contains("0123456789abcdef"));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_7X13_BOLD, FONT_10X20}
 use embedded_graphics::mono_font::{MonoFont, MonoTextStyle};
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use qrcodegen::{QrCode, QrCodeEcc};
@@ -140,7 +140,11 @@ where
         Alignment::Left,
         t,
     )?;
-    if let Some(right) = footer_right(s) {
+    if s.attention {
+        // The person is needed back at the computer; that outranks both the
+        // hostname and the sign-in warning, which come back once it clears.
+        draw_attention_icon(t)?;
+    } else if let Some(right) = footer_right(s) {
         text(
             &right,
             &FONT_6X10,
@@ -149,6 +153,35 @@ where
             Alignment::Right,
             t,
         )?;
+    }
+    Ok(())
+}
+
+/// Width and height of the attention icon, an odd number so the "i" can sit
+/// on a centre pixel.
+const ICON: i32 = 11;
+
+/// A circled "i" at the right end of the footer, as tall as its text.
+fn draw_attention_icon<D>(t: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    let (left, top) = (TEXT_RIGHT + 1 - ICON, FOOTER_Y - 1);
+    Circle::new(Point::new(left, top), ICON as u32)
+        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+        .draw(t)?;
+    let mid = left + ICON / 2;
+    let ink = PrimitiveStyle::with_fill(BinaryColor::On);
+    // Dot, then a stem with a serif at the top and a base.
+    for (x, y, w, h) in [
+        (mid, top + 2, 1, 1),
+        (mid - 1, top + 4, 2, 1),
+        (mid, top + 5, 1, 3),
+        (mid - 1, top + 8, 3, 1),
+    ] {
+        Rectangle::new(Point::new(x, y), Size::new(w, h))
+            .into_styled(ink)
+            .draw(t)?;
     }
     Ok(())
 }
@@ -568,6 +601,7 @@ mod tests {
                             stale,
                             sign_in_left,
                             host,
+                            attention: false,
                         };
                         assert_within_margins(Screen::Dashboard(&s));
                     }
@@ -676,6 +710,7 @@ mod tests {
             stale: true,
             sign_in_left: None,
             host: Some("w".repeat(63)),
+            attention: false,
         };
         let longest_left = footer_left(&s).len() as i32;
         let longest_right = "re-login in 23h 59m".len() as i32;
@@ -696,6 +731,7 @@ mod tests {
             stale: false,
             sign_in_left: None,
             host: Some("claude-ticker".to_owned()),
+            attention: false,
         };
         assert_eq!(footer_right(&s).as_deref(), Some("claude-ticker"));
         s.sign_in_left = Some(Span::from_minutes(90));
@@ -707,6 +743,46 @@ mod tests {
         assert_eq!(footer_right(&s), None);
         s.host = None;
         assert_eq!(footer_right(&s), None);
+    }
+
+    #[test]
+    fn attention_icon_replaces_hostname_and_warning_and_fits() {
+        let mut s = Status {
+            rows: vec![row("SESSION", 62, Reset::Unknown)],
+            updated: naive("2026-10-21 23:59"),
+            stale: true,
+            sign_in_left: Some(Span::from_minutes(23 * 60 + 59)),
+            host: Some("w".repeat(63)),
+            attention: false,
+        };
+        let footer = |s: &Status| {
+            let mut fb = Framebuffer::new();
+            let Ok(()) = draw(&Screen::Dashboard(s), &mut fb);
+            fb
+        };
+        let plain = footer(&s);
+        s.attention = true;
+        let raised = footer(&s);
+        assert_within_margins(Screen::Dashboard(&s));
+
+        // Everything right of the left text is the icon alone: nothing
+        // between the two, and the icon fills its own box on the right.
+        let left_end = MARGIN + 6 * footer_left(&s).len() as i32;
+        let icon_left = TEXT_RIGHT + 1 - ICON;
+        let ink_in = |fb: &Framebuffer, x0: i32, x1: i32| {
+            fb.pixels().any(|p| {
+                p.1.is_on() && (x0..x1).contains(&p.0.x) && (FOOTER_Y - 1..122).contains(&p.0.y)
+            })
+        };
+        assert!(ink_in(&plain, left_end + 1, icon_left));
+        assert!(!ink_in(&raised, left_end + 1, icon_left));
+        assert!(ink_in(&raised, icon_left, TEXT_RIGHT + 1));
+        // The rows above are untouched.
+        for y in 0..FOOTER_Y - 1 {
+            for x in 0..250 {
+                assert_eq!(plain.pixel(x, y as u32), raised.pixel(x, y as u32));
+            }
+        }
     }
 
     #[test]

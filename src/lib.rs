@@ -3,7 +3,7 @@
 //!
 //! Layers, from pure logic down to hardware (dependencies only point down):
 //! [`usage`] → [`source`] → [`config`] → [`view`] → [`framebuffer`] → [`panel`]
-//! → [`app`], with the network client `api`, the sign-in page `web`, and the
+//! → [`app`], with the network client `api`, the sign-in page `web`, the "needs you" listener `notify`, and the
 //! output backends `epd`, `preview` and `simulator` behind features.
 
 pub mod app;
@@ -16,6 +16,9 @@ pub mod view;
 
 #[cfg(feature = "net")]
 pub mod api;
+
+#[cfg(feature = "web")]
+pub mod notify;
 
 #[cfg(feature = "web")]
 pub mod web;

@@ -17,6 +17,8 @@ A small Rust program that runs on a **Raspberry Pi Zero / Zero 2 W** with a **Wa
 
 Each limit is a row with a progress bar. A footer shows when the numbers were fetched, and marks them `STALE` when old.
 
+It can also show a small "i" icon in the footer when Claude Code needs the person back at the computer (an approval, say). Claude Code's hooks push to a small listener on the Pi (`notify`); off by default. Added at the owner's request on 2026-11-01.
+
 It is a repurposed copy of `bump-ticker`, a pregnancy tracker on the same hardware. The layering, e-paper handling and deployment carried over unchanged.
 
 ### Explicit non-goals
@@ -25,7 +27,7 @@ Do **not** add these unless the project owner asks for them in writing:
 
 - Anything that reads or shows prompts, conversations or other account content. Only the usage numbers are fetched.
 - Account management beyond signing in: changing plans, buying credits, switching organisations. (Signing in from the Pi, by QR code or `claude-ticker login`, was added at the owner's request.)
-- Cloud services, telemetry or analytics. The only network traffic is the usage API, sign-in and token refresh, NTP, and the local sign-in page while it is open.
+- Cloud services, telemetry or analytics. The only network traffic is the usage API, sign-in and token refresh, NTP, the local sign-in page while it is open, and, only when `[notify]` is configured, the token-protected "needs you" listener on the local network.
 - A ticker or rotating pages. The owner asked for one dashboard. Ticker support was removed in the conversion.
 - A desktop GUI for end users, or animation or scrolling (see §5). The `simulator` feature (§7) is a **developer tool** that mimics the panel. It is not a product UI.
 
@@ -45,6 +47,7 @@ panel       Panel trait ("put this frame on glass") + RefreshPolicy.
 app         The loop: Clock → fetch → Status → view → Panel → sleep.
 api         UsageSource over HTTPS, token refresh, login (feature "net"; "epd" implies it)
 web         Portal: the phone sign-in page on the LAN    (feature "web"; "epd" implies it)
+notify      Attention: "needs you" listener for Claude Code hooks (feature "web")
 epd         Panel for the real HAT                      (feature "epd", Linux only)
 preview     Panel that writes PNG files                 (feature "preview")
 simulator   Panel in a desktop SDL window               (feature "simulator")
@@ -63,6 +66,7 @@ examples/   preview.rs, simulator.rs, logo.rs: dev tools.
 | `app` | all of the above | `api`, `rppal`, `epd-waveshare`, `image`, `ureq` |
 | `api` | `source`, `usage`, `ureq`, `ring`, `serde_json` | `view`, `panel`, `app`, `config` |
 | `web` | `source`, `api`, `chrono`, `std::net` | `view`, `panel`, `app`, `config` |
+| `notify` | `source`, `web` (its request reader), `chrono`, `std::net` | `view`, `panel`, `app`, `config`, `api` |
 | `epd` | `panel`, `framebuffer`, `rppal`, `epd-waveshare` | `view`, `app`, `config` |
 | `preview` | `panel`, `framebuffer`, `image` | `view`, `app`, `config` |
 | `simulator` | `panel`, `framebuffer`, `embedded-graphics`, `embedded-graphics-simulator` | `view`, `app`, `config` |
@@ -70,7 +74,7 @@ examples/   preview.rs, simulator.rs, logo.rs: dev tools.
 Rules that follow from this:
 
 - `view` draws onto a **generic** `DrawTarget<Color = BinaryColor>`, so it runs against the framebuffer, a PNG or the simulator.
-- `app` talks to the outside world only through the `Panel`, `Clock`, `UsageSource` and `Portal` traits. That is what makes it testable with fakes.
+- `app` talks to the outside world only through the `Panel`, `Clock`, `UsageSource`, `Portal` and `Attention` traits. That is what makes it testable with fakes.
 - Hardware crates (`rppal`, `epd-waveshare`) stay behind `epd`, the HTTP client (`ureq`) behind `net`, and the sign-in page behind `web`. `cargo build` and `cargo test` with **no features** must work on any Linux, macOS or Windows machine.
 - `rppal` only compiles on Linux, so the `epd` module is gated on `all(feature = "epd", target_os = "linux")`. On other hosts `--features epd` builds everything else, and `main` falls back to `--check` behaviour.
 - The SDL2-based simulator stays behind `simulator`.
@@ -103,6 +107,7 @@ These live in `src/usage.rs`, and each has a unit test there. `tests/usage_api.r
 - Reset lines: `resets 14:30 (in 2h 14m)` when under a day away, otherwise `resets Fri 09:00 (in 3d 20h)`.
 - Sign-in warning: when the refresh token expires within `SIGN_IN_WARNING` (5 days), the footer shows `re-login in <span>` (`usage::sign_in_warning`, filled in by `app` from `UsageSource::sign_in_expires`). Unknown expiry means no warning.
 - Hostname: otherwise the footer's right side shows the device's hostname (`Status::host`, filled in by `app` from `App::with_host`; `main` reads `/proc/sys/kernel/hostname`). The sign-in warning takes its place when due. Non-ASCII and whitespace characters are dropped, and it is cut short to keep two characters clear of the left text (22 characters next to `STALE Mon 12:16`).
+- Attention: while `Attention::raised()` is true the footer's right side shows a circled "i" (11 px, `view::draw_attention_icon`) instead of the hostname **and** the sign-in warning, which return once it clears. Dashboard only. `App::run` waits in slices of `ATTENTION_POLL` (1 s) when it has an attention source and redraws only on a change (`App::poll_attention`), so the icon appears within about a second rather than at the next fetch. Ignored while the waiting-for-time screen is up.
 - Credits: the row shows the amount left (cap − spent, never negative, e.g. `$14.10`) where other rows show a percentage, and its bar is the share *remaining* (`Row::percent` is percent remaining for this row only). The line under the bar is `of $40.00 monthly limit`. This is the spend limit, not the prepaid balance shown on the claude.ai usage page, which the API does not return (`spend.balance` and `promo_credits` are null, checked 2026-10-31). The claude.ai figure counted a fixed A$10.00 more (promotional credit), so `[display] credits_bonus` adds an amount by hand: it is added to both the amount left and the cap (`Usage::with_credits_bonus`, applied in `app`), and the line becomes `of $50.00 incl. bonus`. It defaults to 0 because it is specific to one account. `$` is used for USD, AUD, CAD, NZD, SGD and HKD; other currencies are written as their code (`EUR 14.10`), since the fonts are ASCII-only. The API gives no date for the cap's reset, so none is shown.
 - Staleness: data older than `stale_minutes` is flagged `STALE`. Data older than `STALE_LIMIT_FACTOR` (6) × `stale_minutes` is `StatusError::Stale`, and the error screen replaces the numbers.
 
@@ -143,6 +148,11 @@ stale_minutes = 15          # flag STALE after this; must cover at least one pol
 full_refresh_every = 12     # partial refreshes between full refreshes; minimum 1
 flipped = false             # rotate 180° if the Pi is mounted upside down
 credits_bonus = 0.00        # extra credit the API doesn't report, added to CREDITS LEFT; 0 to 1000000
+
+[notify]
+port = 0                    # "needs you" listener for Claude Code hooks; 0 = off, else 1024 or above
+token = ""                  # shared secret, at least 16 characters, no spaces; required when port is set
+timeout_minutes = 30        # the icon clears itself after this long; minimum 1
 ```
 
 Every key is optional and defaults to the values shown.
@@ -150,6 +160,7 @@ Every key is optional and defaults to the values shown.
 - Use `#[serde(deny_unknown_fields)]` on every config struct, so typos fail loudly.
 - Validate everything in `Config::from_toml`, so a bad config fails at startup, not on first render.
 - Adding a field: give it a `Default`, document it in the doc comment at the top of `src/config.rs` **and** in this file, and add a test.
+- The notify token is a secret in a world-readable file (0644), so anyone with a shell on the Pi can read it; it is kept out of `Debug` output and logs. The listener (`notify::NotifyListener`) accepts only `POST /attention` and `POST /clear` with `Authorization: Bearer <token>` (401 without, 404 for other paths, 405 for other methods), and a raised flag expires after `timeout_minutes` so a missed clear never leaves the icon stuck. Client side: `deploy/claude-ticker-notify.sh` and `deploy/claude-hooks.example.json`. Plain HTTP, local network only.
 - Credentials are **not** in the config, only their path. The app rewrites that file; it never rewrites the config.
 
 ---
@@ -182,15 +193,17 @@ The approved UI mockup is [`docs/ui-mockup.png`](docs/ui-mockup.png). **Treat it
 1. Dashboard, Pro: session and week.
 2. Dashboard with a model row (`WEEK OPUS`, compact layout).
 3. Dashboard with a model row and credits (`CREDITS LEFT`, A$14.10 of A$40.00; dense four-row layout).
-4. Stale: 40 minutes without an update.
-5. Stale, with the sign-in expiry warning at its longest (`re-login in 23h 59m`).
-6. Sign in: the QR code for `http://192.168.1.23:8080/k7Qp2xNa`, with the address written out and broken after the port.
-7. Waiting for time ("SETTING THE CLOCK").
-8. Error ("CAN'T GET USAGE"), shown when there is no sign-in page.
+4. Dashboard with the "needs you" icon in place of the hostname.
+5. Stale: 40 minutes without an update.
+6. Stale, with the sign-in expiry warning at its longest (`re-login in 23h 59m`).
+7. Sign in: the QR code for `http://192.168.1.23:8080/k7Qp2xNa`, with the address written out and broken after the port.
+8. Waiting for time ("SETTING THE CLOCK").
+9. Error ("CAN'T GET USAGE"), shown when there is no sign-in page.
 
 ![Approved UI mockup](docs/ui-mockup.png)
 
 - Revisions:
+  - 2026-11-01: "needs you" icon added to the footer (tile 4).
   - 2026-10-31: usage credits row added (tile 3), with the dense four-row layout for when a model row is also present.
   - 2026-10-31: hostname added to the footer's right side (`claude-ticker` in the mockup), giving way to the sign-in warning.
   - 2026-10-23: sign-in screen with QR code added.
@@ -200,7 +213,7 @@ The approved UI mockup is [`docs/ui-mockup.png`](docs/ui-mockup.png). **Treat it
   - Black on white. Generous whitespace.
   - Each row is a bold uppercase label on the left with the percentage on the right, then the bar, then the reset line in the small font.
   - The progress bar is a 1 px outline with a solid fill and a 2 px inset.
-  - No icons, illustrations or decoration beyond the bars, and the sign-in screen's QR code.
+  - No icons, illustrations or decoration beyond the bars, the sign-in screen's QR code and the footer's "needs you" icon (owner-approved 2026-11-01; don't add others without asking).
   - **QR code:** ECC level M, drawn module by module at the largest whole scale that fits 110 px (at most 4 px, at least 2 px; otherwise text only). A typical address gives version 3 (29 modules) at 3 px, 87 px square, vertically centred, with dark modules starting at `MARGIN`. The white margin and panel border are its quiet zone. It decodes at the panel's native 1:1 resolution. Keep addresses short (no hostnames, no query strings) so it stays at this size.
   - **One exception:** the project logo, an infinity symbol, appears on the waiting-for-time screen, centred below the message.
     - Source: `resources/logo.png`. The panel bitmap is `resources/logo.raw` (115×58, 1-bit), which `view` embeds with `include_bytes!`.
@@ -278,7 +291,7 @@ cargo run --example preview --features preview -- 62 23 4 out/
 
 The Linux-target check needs `rustup target add aarch64-unknown-linux-gnu` once. It doesn't link, so no cross linker is required, only the C compiler shim for `ring`.
 
-The preview example writes `out/dashboard.png`, `out/dashboard-model.png`, `out/dashboard-four.png`, `out/dashboard-credits.png` (not in the mockup), `out/stale.png`, `out/expiry-warning.png`, `out/sign-in.png`, `out/waiting.png`, `out/error.png` and `out/mockup.png` at 3× scale. Open and inspect them after any change to `view`. Do not commit `out/`. At `62 23 4`, `out/mockup.png` is `docs/ui-mockup.png` pixel for pixel; copy it over when a layout change is approved. The README shows the single screens from `docs/screens/`, which are the other nine PNGs at `62 23 4`; copy them over at the same time.
+The preview example writes `out/dashboard.png`, `out/dashboard-model.png`, `out/dashboard-four.png`, `out/dashboard-credits.png` (not in the mockup), `out/dashboard-attention.png`, `out/stale.png`, `out/expiry-warning.png`, `out/sign-in.png`, `out/waiting.png`, `out/error.png` and `out/mockup.png` at 3× scale. Open and inspect them after any change to `view`. Do not commit `out/`. At `62 23 4`, `out/mockup.png` is `docs/ui-mockup.png` pixel for pixel; copy it over when a layout change is approved. The README shows the single screens from `docs/screens/`, which are the other ten PNGs at `62 23 4`; copy them over at the same time.
 
 Other percentages are worth eyeballing after layout changes, e.g. `0 0 0`, `100 100 100` and `5 97 50`.
 
@@ -313,6 +326,7 @@ cargo clippy --all-targets --features simulator -- -D warnings   # when SDL2 is 
 | [ / ] | week −5 / +5 % |
 | ← / → | time −1 / +1 hour (redraw without fetching, so staleness and resets show) |
 | O | toggle the Opus weekly row |
+| I | toggle the "needs you" icon |
 | C | toggle usage credits (A$25.90 of A$40.00) |
 | X | toggle network failures |
 | A | toggle "signed out": shows the sign-in QR screen; press again to play the phone finishing the sign-in |

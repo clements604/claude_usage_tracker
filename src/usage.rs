@@ -240,6 +240,7 @@ impl Usage {
             stale: age > stale_after,
             sign_in_left: None,
             host: None,
+            attention: false,
         })
     }
 }
@@ -369,6 +370,11 @@ pub struct Status {
     /// The device's hostname, shown in the footer so you know which Pi to
     /// SSH into. [`Usage::status`] leaves it `None`; the app fills it in.
     pub host: Option<String>,
+    /// The person is needed back at the computer (see
+    /// [`Attention`](crate::source::Attention)); the footer shows an icon
+    /// instead of the hostname. [`Usage::status`] leaves it `false`; the app
+    /// fills it in.
+    pub attention: bool,
 }
 
 /// How long until the sign-in expires at `expires`, if that is within

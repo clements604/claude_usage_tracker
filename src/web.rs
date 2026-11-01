@@ -211,14 +211,16 @@ fn handle(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct Request {
-    method: String,
-    path: String,
-    body: String,
+pub(crate) struct Request {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) body: String,
+    /// The `Authorization` header, if any.
+    pub(crate) authorization: Option<String>,
 }
 
 /// Read one HTTP/1.1 request; `None` if it is malformed or too big.
-fn read_request(stream: &mut impl Read) -> io::Result<Option<Request>> {
+pub(crate) fn read_request(stream: &mut impl Read) -> io::Result<Option<Request>> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
     let head_end = loop {
@@ -241,11 +243,17 @@ fn read_request(stream: &mut impl Read) -> io::Result<Option<Request>> {
     let (Some(method), Some(path)) = (first.next(), first.next()) else {
         return Ok(None);
     };
-    let length = lines
-        .filter_map(|l| l.split_once(':'))
-        .find(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+    let headers: Vec<(&str, &str)> = lines.filter_map(|l| l.split_once(':')).collect();
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.trim().eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.trim())
+    };
+    let length = header("content-length")
+        .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
+    let authorization = header("authorization").map(str::to_owned);
     if length > MAX_REQUEST {
         return Ok(None);
     }
@@ -263,6 +271,7 @@ fn read_request(stream: &mut impl Read) -> io::Result<Option<Request>> {
         method: method.to_owned(),
         path: path.to_owned(),
         body: String::from_utf8_lossy(&body).into_owned(),
+        authorization,
     }))
 }
 
@@ -443,8 +452,12 @@ mod tests {
                 method: "POST".into(),
                 path: "/abc?x=1".into(),
                 body: "code=a%2".into(),
+                authorization: None,
             }
         );
+        let raw = b"POST /x HTTP/1.1\r\nAuthorization: Bearer s3cret\r\n\r\n";
+        let req = read_request(&mut &raw[..]).unwrap().unwrap();
+        assert_eq!(req.authorization.as_deref(), Some("Bearer s3cret"));
         assert_eq!(read_request(&mut &b"nonsense"[..]).unwrap(), None);
         assert_eq!(read_request(&mut &b"\r\n\r\n"[..]).unwrap(), None);
     }
